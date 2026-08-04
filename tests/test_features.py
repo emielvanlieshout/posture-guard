@@ -27,10 +27,18 @@ def frontal(angle, **kw):
     return extract_frontal(synth_frame(posture=Posture(protraction_deg=angle, **kw)))
 
 
-def side(angle, camera=None, **kw):
+def side(angle, camera=None, hips=0.25, **kw):
     return extract_side(
-        synth_frame(posture=Posture(protraction_deg=angle, yaw_deg=90.0, **kw), camera=camera)
+        synth_frame(
+            posture=Posture(protraction_deg=angle, yaw_deg=90.0, **kw),
+            camera=camera,
+            hip_visibility=hips,
+        )
     )
+
+
+# Indices into SIDE_FEATURES.
+SHOULDER_AHEAD, NECK_INCLINE, TRUNK_INCLINE, HEAD_OVER_HIP = 0, 1, 5, 6
 
 
 class TestFrontalLimits:
@@ -94,6 +102,53 @@ class TestSideView:
         sample = extract_side(synth_frame(posture=Posture(protraction_deg=10)))
         assert not sample.ok
         assert "side view" in sample.reason
+
+
+class TestProtractionVersusHead:
+    """The reason the hips have to be in frame.
+
+    Forward head posture moves the ear the same way protraction moves the
+    shoulder, so anything measured between the two conflates them. Anything
+    measured against the pelvis does not.
+    """
+
+    def test_ear_referenced_features_invert_when_the_head_leads(self):
+        pure = side(30, **STILL).values[SHOULDER_AHEAD]
+        led = side(30, head_forward_m=0.18, **STILL).values[SHOULDER_AHEAD]
+
+        assert pure > 0.9, "shoulders 30 degrees forward, head still: reads strongly forward"
+        assert led < -0.5, (
+            "same shoulders, head further forward still: the sign flips and the feature "
+            "now claims the shoulders are back"
+        )
+
+    def test_the_two_motions_nearly_cancel_in_a_realistic_slouch(self):
+        pure = side(30, **STILL).values[SHOULDER_AHEAD]
+        together = side(30, head_forward_m=0.09, **STILL).values[SHOULDER_AHEAD]
+        assert together < pure / 5, "most of the signal is eaten by the head moving too"
+
+    def test_trunk_incline_ignores_the_head_entirely(self):
+        still = side(20, hips=0.95, **STILL).values[TRUNK_INCLINE]
+        craning = side(20, hips=0.95, head_forward_m=0.12, **STILL).values[TRUNK_INCLINE]
+        assert still == pytest.approx(craning, abs=0.01)
+        assert still > 5.0, "and it still responds to the shoulders"
+
+    def test_head_over_hip_ignores_the_shoulders_entirely(self):
+        values = [side(a, hips=0.95, **STILL).values[HEAD_OVER_HIP] for a in (0, 15, 30)]
+        assert values[0] == pytest.approx(values[-1], abs=0.01)
+
+    def test_head_over_hip_tracks_the_head(self):
+        values = [
+            side(0, hips=0.95, head_forward_m=h, **STILL).values[HEAD_OVER_HIP]
+            for h in (0.0, 0.04, 0.08, 0.12)
+        ]
+        assert all(b > a for a, b in zip(values, values[1:]))
+
+    def test_the_pelvis_referenced_pair_is_lost_without_hips(self):
+        sample = side(20, hips=0.25)
+        assert np.isnan(sample.values[TRUNK_INCLINE])
+        assert np.isnan(sample.values[HEAD_OVER_HIP])
+        assert np.isfinite(sample.values[SHOULDER_AHEAD]), "the ambiguous ones remain"
 
 
 class TestQualityGates:

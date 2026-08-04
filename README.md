@@ -59,6 +59,28 @@ So posture-guard supports both, defaults to the side, and **tells you in numbers
 whether your setup can actually see your slouch** instead of leaving you to find
 out after three weeks.
 
+### And why your hip has to be in the shot
+
+The ear turns out to be a treacherous reference. Forward head posture moves the
+ear the same way protraction moves the shoulder, so any measurement taken
+between the two conflates them. Same model, `shoulder_ahead` at 30° of
+protraction:
+
+| head position | shoulder_ahead |
+|---|---:|
+| head stays put | **0.99** |
+| head drifts forward with the shoulders | 0.11 |
+| head runs further forward than the shoulders | **−0.80** |
+
+The sign inverts. The feature ends up reporting "shoulders back" about someone
+whose shoulders came forward.
+
+Anything referenced to the pelvis is immune, because your pelvis does not move
+when you crane your neck. `trunk_incline` responds to protraction and ignores
+head travel completely; `head_over_hip` does the reverse. With both in play the
+two motions are separable — which is why the side view wants your hip in frame,
+and why calibration says so when it is missing.
+
 ---
 
 ## Install
@@ -90,10 +112,12 @@ overlay and the menu bar are macOS-only.
 ## Setting up the camera
 
 **Side view (recommended).** Put a camera to your left or right, roughly at
-shoulder height, far enough back to see your head and shoulder in profile.
-An old phone on a stand works; on macOS an iPhone via Continuity Camera shows up
-as an ordinary camera. Use `posture-guard doctor` to find its index and
-`posture-guard config --set camera_index=1` to select it.
+shoulder height, far enough back to see your head, shoulder **and hip** in
+profile. That last one matters — see above; without it, tucking your chin would
+satisfy the profile while your shoulders stay exactly where they were, and
+calibration will warn you. An old phone on a stand works; on macOS an iPhone via
+Continuity Camera shows up as an ordinary camera. Use `posture-guard doctor` to
+find its index and `posture-guard config --set camera_index=1` to select it.
 
 **Frontal view.** Your built-in webcam, whole head and both shoulders in frame.
 It will track the slouch complex — chin dropping, head drifting forward,
@@ -132,14 +156,55 @@ You will get a table like this, and it is worth reading:
 
 ```
 feature                   good    slouch  separation   weight
-shoulder_ahead           0.043     0.418       17.31     0.61
-neck_incline             2.104    19.284       11.02     0.34
-head_pitch               4.881    -7.402        2.14     0.05
-face_over_neck           1.221     1.187        0.31     0.00
+trunk_incline            0.866     9.467       21.94     0.18
+head_over_hip            0.039     0.452       18.02     0.18
+ear_shoulder_hip       177.588   150.596       15.71     0.18
+shoulder_ahead           0.038     0.426       17.31     0.09
+neck_incline             1.541    19.951       11.02     0.09
+head_pitch               5.961    -2.313        6.14     0.18
+face_over_neck           0.717     0.798        3.31     0.09
 ```
+
+Separation is not the only thing deciding those weights. It measures how well a
+feature splits your two poses; it cannot tell whether the feature means what its
+name says. The ear-referenced ones are halved on principle, because the geometry
+above says they are ambiguous — and normalisation hands them the full weight back
+anyway when the hips are out of frame and they are all there is.
 
 Recalibrate about once a month. Your "good" posture should itself improve, and
 the app reminds you after 30 days.
+
+### Postures you never demonstrated
+
+Averaging features places you somewhere on the line between your two calibrated
+poses. That is the right answer for postures on that line, and a misleading one
+for postures off it.
+
+Craning at the screen with your shoulders back is the case that matters. Measured
+against the ear, the shoulder now sits *behind* where it does in your good
+posture, so `shoulder_ahead` reports better than perfect while `head_over_hip`
+reports fully slouched. Averaged, they cancel: the first version of this scored
+that posture **+0.12**, essentially "good".
+
+What gives it away is not the average but the argument. Features that agree
+within a few percent for every on-axis posture are suddenly a full scale apart,
+so the spread across features is measured too, and anything beyond what
+calibration saw is added to the score:
+
+| posture | axis | disagreement | final |
+|---|---:|---:|---:|
+| your good pose | 0.01 | 0.05 | 0.01 |
+| on-axis slouch, halfway | 0.56 | 0.06 | 0.56 |
+| your slouch | 1.00 | 0.05 | 1.00 |
+| **shoulders good, head 7 cm forward** | 0.12 | 0.71 | **0.84** |
+| **shoulders slouched, chin tucked** | 0.79 | 0.83 | **1.43** |
+
+On-axis postures are untouched — the ladder stays exactly as smooth as it was.
+The tolerance comes from your own calibration frames rather than a constant, so
+someone whose landmarks are noisy gets a correspondingly higher bar.
+
+So yes, it watches your head. Not because head position was the goal, but
+because a posture nobody demonstrated should not be assumed to be a good one.
 
 ---
 
@@ -292,7 +357,7 @@ profile, model and history. Uninstalling is deleting that directory.
 
 ```bash
 pip install -e ".[dev]"
-pytest -q                            # 176 tests, no camera needed
+pytest -q                            # 196 tests, no camera needed
 posture-guard selftest               # end-to-end on synthetic data
 ```
 
@@ -307,12 +372,14 @@ but the real thing misbehaves, the problem is the camera, a permission or the
 calibration, not the pipeline.
 
 ```
-[PASS] calibration: 90+90 frames, best separation 17.3 noise widths
+[PASS] calibration: 90+90 frames, best separation 21.9 noise widths
+[PASS] weight sits on protraction itself: 18% of the weight is on trunk_incline
+[PASS] a tucked chin does not excuse forward shoulders: scores +1.43 (slouch is ~1.0)
+[PASS] forward head posture is not scored as good posture: scores +0.84 (good is ~0.0)
 [PASS] score anchors: good posture scores -0.01 (want ~0), slouch +1.00 (want ~1)
-[PASS] monotonic in protraction: 0deg=-0.08, 10deg=+0.37, 20deg=+0.78, 30deg=+1.15
-[PASS] distance invariance: score moves 0.15 across a +-25% change in camera distance
-[PASS] alert fires after the dwell window: first alert at 8.0s (dwell is 8s)
-[PASS] alert clears on correction: cleared 1.0s after sitting up
+[PASS] monotonic in protraction: 0deg=-0.09, 10deg=+0.34, 20deg=+0.76, 30deg=+1.14
+[PASS] distance invariance: score moves 0.02 across a +-25% change in camera distance
+[PASS] alert clears on correction: cleared 0.8s after sitting up
 ```
 
 ---
@@ -326,6 +393,9 @@ calibration, not the pipeline.
   those are extrapolated and usually noise, so it normally ends up weighted zero.
   It is left in because calibration decides, not me.
 - A frontal setup cannot isolate protraction. See the top of this file.
+- A side setup without your hip in frame cannot separate protraction from a
+  craning neck either. Calibration warns you; the off-axis penalty catches the
+  worst of it; neither is a substitute for moving the camera back.
 - Multiple people in frame: only the most prominent pose is used.
 - Sharing the camera with a video call works on macOS, but the calibration was
   made at your normal seating distance; expect noisier scores if the call app

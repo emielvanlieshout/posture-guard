@@ -27,6 +27,25 @@ A side camera measures the real thing: the horizontal offset between the ear and
 the acromion is monotonic and near-linear in protraction angle. That is also the
 plane clinicians use for the sagittal shoulder angle.
 
+Why the hips have to be in shot
+-------------------------------
+The ear is a treacherous reference. ``shoulder_ahead`` and ``neck_incline``
+measure the acromion against the ear, and forward head posture moves the ear the
+same way protraction moves the shoulder -- so the two partly cancel. Against the
+synthetic model, 30 degrees of protraction reads 0.99 on ``shoulder_ahead`` when
+the head stays put, 0.11 when the head drifts forward alongside it, and *minus*
+0.80 when the head runs further forward than the shoulders. Sign inverted: the
+feature now says "shoulders back" about someone whose shoulders came forward.
+
+Anything referenced to the pelvis is immune, because the pelvis does not move
+when you crane your neck. ``trunk_incline`` responds to protraction and ignores
+head travel entirely; ``head_over_hip`` does the reverse. With both in play the
+two motions are separable, and calibration can weight the one that matters.
+
+So a side camera wants your hip in frame, and calibration says so when it is
+missing. Without it, retracting your head alone will satisfy the profile while
+your shoulders stay exactly where they were.
+
 Every feature in both sets is a ratio or an angle, never a raw distance, so
 leaning toward the screen cannot masquerade as a change in posture.
 """
@@ -58,6 +77,7 @@ SIDE_FEATURES: tuple[str, ...] = (
     "face_over_neck",  # face height / ear-to-shoulder distance
     "ear_shoulder_hip",  # angle at the shoulder, degrees (needs hips)
     "trunk_incline",  # shoulder-to-hip tilt off vertical (needs hips)
+    "head_over_hip",  # ear in front of the hip / face height (needs hips)
 )
 
 
@@ -218,8 +238,11 @@ def extract_side(frame: PoseFrame, limits: QualityLimits | None = None) -> Featu
         if denom > EPS:
             cos = float(np.clip(np.dot(v1, v2) / denom, -1.0, 1.0))
             values[4] = math.degrees(math.acos(cos))
+        # Referenced to the pelvis, which stays put while you crane your neck.
+        # These two are what separate protraction from forward head posture.
         trunk = shoulder_mid - hip_mid
         values[5] = math.degrees(math.atan2(facing * trunk[0], -trunk[1] + EPS))
+        values[6] = facing * (ear_mid[0] - hip_mid[0]) / face_h
 
     return FeatureSample(ts=frame.ts, values=values, ok=True, pose_hint=facing)
 
@@ -253,7 +276,15 @@ class FeatureSet:
     view: str
     names: tuple[str, ...]
     extract: Callable[..., FeatureSample]
+    #: Features that measure protraction itself rather than something adjacent.
     primary: tuple[int, ...]
+    #: Features that go NaN when the hips are out of frame.
+    hip_dependent: tuple[int, ...]
+    #: Multiplier applied before calibration normalises the weights. Separation
+    #: measures how well a feature tells your two poses apart; it cannot tell
+    #: whether the feature means what its name says. This is where the geometry
+    #: gets a vote -- see the module docstring on ear-referenced features.
+    prior: tuple[float, ...]
     blurb: str
 
     @property
@@ -266,8 +297,17 @@ FEATURE_SETS: dict[str, FeatureSet] = {
         view="side",
         names=SIDE_FEATURES,
         extract=extract_side,
-        primary=(0, 1),
-        blurb="camera to your side; measures protraction directly",
+        # trunk_incline alone: the ear-referenced pair conflates protraction
+        # with forward head posture and can invert outright. See the module
+        # docstring and tests/test_features.py::TestProtractionVersusHead.
+        primary=(5,),
+        hip_dependent=(4, 5, 6),
+        # Halved for the three ear-referenced features, because forward head
+        # posture moves their reference point. They stay in -- with the hips out
+        # of frame they are all there is, and normalisation hands them the full
+        # weight again once the pelvis-referenced ones drop out.
+        prior=(0.5, 0.5, 1.0, 0.5, 1.0, 1.0, 1.0),
+        blurb="camera to your side; measures protraction directly, hips in frame",
     ),
     "frontal": FeatureSet(
         view="frontal",
@@ -277,6 +317,10 @@ FEATURE_SETS: dict[str, FeatureSet] = {
         # in this set is confounded by the head, which is why a frontal profile
         # always comes with a caveat -- see calibration.verdict.
         primary=(0,),
+        hip_dependent=(4, 5),
+        # Nothing to prefer: head-on there is no unambiguous alternative to fall
+        # back on, so separation decides on its own.
+        prior=(1.0,) * len(FRONTAL_FEATURES),
         blurb="built-in webcam; measures the slouch complex, not protraction itself",
     ),
 }

@@ -50,6 +50,11 @@ class Posture:
     rise_coupling: float = 0.25  # shoulder elevation per unit forward travel
     forward_coupling: float = 0.55  # head translation per unit forward travel
     pitch_coupling: float = 0.35  # degrees of chin drop per degree of protraction
+    # Head translation in metres that owes nothing to the shoulders: forward head
+    # posture on its own. Kept separate from forward_coupling so the two can be
+    # dialled independently, which is what tells protraction features apart from
+    # ones that merely track the head.
+    head_forward_m: float = 0.0
     torso_lean_deg: float = 0.0
     yaw_deg: float = 0.0
     roll_deg: float = 0.0
@@ -71,7 +76,9 @@ def _body_points(body: Body, posture: Posture) -> dict[int, np.ndarray]:
     l_sh = np.array([a * math.cos(theta), posture.rise_coupling * forward, forward])
     r_sh = np.array([-a * math.cos(theta), posture.rise_coupling * forward, forward])
 
-    head_c = np.array([0.0, body.head_height, posture.forward_coupling * forward])
+    head_c = np.array(
+        [0.0, body.head_height, posture.forward_coupling * forward + posture.head_forward_m]
+    )
 
     head_local = {
         int(LM.LEFT_EAR): np.array([body.ear_half, 0.0, 0.0]),

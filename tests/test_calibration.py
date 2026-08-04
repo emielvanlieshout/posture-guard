@@ -12,8 +12,10 @@ SIDE = get_feature_set("side")
 FRONTAL = get_feature_set("frontal")
 
 
-def series(view, angle, n=60, seed=0, **kw):
-    base = Posture(yaw_deg=90.0 if view == "side" else 0.0)
+def series(view, angle, n=60, seed=0, pose=None, **kw):
+    base = Posture(yaw_deg=90.0 if view == "side" else 0.0, **(pose or {}))
+    # A side camera placed properly has the hip in shot; a laptop webcam does not.
+    kw.setdefault("hip_visibility", 0.95 if view == "side" else 0.25)
     return synth_series(angle, n=n, seed=seed, posture=base, **kw)
 
 
@@ -54,8 +56,15 @@ class TestProfileBuilding:
         feature_set, _, _, profile = calibrate("side")
         assert profile.view == "side"
         assert profile.weights.sum() == pytest.approx(1.0)
-        # The direct protraction measures should carry most of the weight.
-        assert sum(profile.weights[i] for i in feature_set.primary) > 0.4
+
+        # With the hips in frame the bulk of the weight should sit on the
+        # measurements the head cannot fool.
+        pelvis = sum(profile.weights[i] for i in feature_set.hip_dependent)
+        assert pelvis > 0.5
+
+        # And the shoulder-versus-pelvis measurement specifically should beat an
+        # even split, rather than being drowned by the ambiguous majority.
+        assert sum(profile.weights[i] for i in feature_set.primary) > 1 / feature_set.n
 
     def test_the_frontal_view_calibrates_on_the_slouch_complex(self):
         _, _, _, profile = calibrate("frontal")
@@ -114,3 +123,46 @@ class TestVerdict:
         feature_set, _, _, profile = calibrate("side")
         _, note = verdict(profile, feature_set)
         assert "side camera" not in note
+
+    def test_a_side_profile_without_hips_is_warned_about(self):
+        """Ear-referenced features alone cannot separate protraction from a craning neck."""
+        feature_set = SIDE
+        good = collect_samples(series("side", 2.0, seed=1, hip_visibility=0.1), feature_set)
+        bad = collect_samples(series("side", 26.0, seed=2, hip_visibility=0.1), feature_set)
+        profile = build_profile(feature_set, good, bad)
+
+        assert all(profile.weights[i] == 0 for i in feature_set.hip_dependent)
+        ok, note = verdict(profile, feature_set)
+        assert ok
+        assert "hips were not in frame" in note
+        assert "chin back" in note
+
+
+class TestHeadPositionEndToEnd:
+    """The question the design has to answer: does it notice the head at all?"""
+
+    def test_forward_head_posture_is_not_mistaken_for_good_posture(self):
+        feature_set, _, _, profile = calibrate("side")
+        craning = collect_samples(
+            series("side", 2.0, seed=9, pose={"head_forward_m": 0.07}), feature_set
+        )
+        value = float(np.median([score(profile, v) for v in craning.values]))
+        assert value > 0.55, f"shoulders fine, head 7cm forward scored {value:.2f}"
+
+    def test_a_tucked_chin_does_not_excuse_forward_shoulders(self):
+        feature_set, _, _, profile = calibrate("side")
+        tucked = collect_samples(
+            series("side", 26.0, seed=10, pose={"head_forward_m": -0.06}), feature_set
+        )
+        value = float(np.median([score(profile, v) for v in tucked.values]))
+        assert value > 0.8, f"shoulders still slouched but chin tucked scored {value:.2f}"
+
+    def test_on_axis_postures_keep_their_smooth_ladder(self):
+        """The off-axis penalty must not disturb ordinary slouching."""
+        feature_set, _, _, profile = calibrate("side")
+        ladder = []
+        for angle in (2.0, 8.0, 14.0, 20.0, 26.0):
+            samples = collect_samples(series("side", angle, n=40, seed=11), feature_set)
+            ladder.append(float(np.median([score(profile, v) for v in samples.values])))
+        assert all(b > a for a, b in zip(ladder, ladder[1:])), ladder
+        assert ladder[0] < 0.15 and ladder[-1] > 0.85

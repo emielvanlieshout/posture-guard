@@ -90,6 +90,7 @@ def build_profile(
         good.values,
         bad.values,
         min_separation=min_separation,
+        prior=feature_set.prior,
     )
 
 
@@ -114,6 +115,27 @@ def verdict(profile: Profile, feature_set: FeatureSet) -> tuple[bool, str]:
 
     strength = "Strong" if best >= 3.0 else "Workable"
     note = f"{strength} separation (best feature {best:.1f} noise widths)."
+
+    if feature_set.view == "side":
+        hip_weight = float(sum(profile.weights[i] for i in feature_set.hip_dependent))
+        if hip_weight < 0.15:
+            return True, note + (
+                " Your hips were not in frame, so every feature here measures one part"
+                " of you against another part that moves too. Forward head posture"
+                " shifts the ear the same way protraction shifts the shoulder, and the"
+                " two cancel -- badly enough to invert the sign when the head leads."
+                " In practice that means pulling your chin back would satisfy this"
+                " profile with your shoulders untouched. Move the camera back or down"
+                " until your hip is in shot, then calibrate again."
+            )
+        protraction_weight = float(sum(profile.weights[i] for i in feature_set.primary))
+        if protraction_weight < 0.15:
+            return True, note + (
+                f" Note that only {protraction_weight:.0%} of the weight sits on the"
+                " pelvis-referenced shoulder measurement; the rest is head and neck."
+                " Try exaggerating the shoulder difference between the two poses while"
+                " keeping your head in the same place."
+            )
 
     if feature_set.view == "frontal":
         shoulder_weight = float(sum(profile.weights[i] for i in feature_set.primary))

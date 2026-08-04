@@ -15,7 +15,8 @@ from . import config as cfgmod
 from .calibration import build_profile, collect_samples, verdict
 from .config import Config
 from .features import QualityLimits, get_feature_set
-from .scoring import CalibrationError, Profile, Scorer
+from .landmarks import LM
+from .scoring import CalibrationError, Profile, Scorer, score_parts
 from .storage import Store
 
 VIEWS = ("side", "frontal")
@@ -187,7 +188,10 @@ def cmd_calibrate(args) -> int:
     if view == "side":
         print(
             "Put the camera to one side of you, roughly at shoulder height, so it sees\n"
-            "your profile. An iPhone on a stand via Continuity Camera works well."
+            "your profile. An iPhone on a stand via Continuity Camera works well.\n"
+            "Get your hip in the shot: without it, every measurement is one part of you\n"
+            "against another part that also moves, and craning your neck would satisfy\n"
+            "the profile with your shoulders untouched."
         )
     else:
         print("Sit as you normally do, facing the camera, whole head and both shoulders in frame.")
@@ -337,11 +341,23 @@ def cmd_preview(args) -> int:
                 if not sample.ok:
                     lines.append(f"rejected: {sample.reason}")
                 else:
-                    if scorer is not None:
+                    if profile is not None:
+                        parts = score_parts(profile, sample.values)
                         value = scorer.update(frame.ts, sample.values)
-                        lines.append(
-                            f"score: {value:.2f}" if value is not None else "score: unavailable"
-                        )
+                        if parts is None or value is None:
+                            lines.append("score: unavailable")
+                        else:
+                            lines.append(f"score: {value:.2f}  (axis {parts.axis:.2f})")
+                            # High disagreement means the features contradict each
+                            # other, i.e. you are in a posture neither calibration
+                            # pose covers. Worth seeing while aiming the camera.
+                            lines.append(
+                                f"disagreement: {parts.disagreement:.2f}"
+                                f"  (+{parts.penalty:.2f})"
+                            )
+                    hips = frame.vis(LM.LEFT_HIP, LM.RIGHT_HIP)
+                    if view == "side" and hips < 0.6:
+                        lines.append("hips not in frame - move the camera back")
                     for name, raw in zip(feature_set.names, sample.values):
                         if np.isfinite(raw):
                             lines.append(f"{name}: {raw:.3f}")

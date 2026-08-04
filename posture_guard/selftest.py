@@ -38,12 +38,20 @@ class Check:
         return f"[{'PASS' if self.passed else 'FAIL'}] {self.name}: {self.detail}"
 
 
-def _posture(view: str, angle: float) -> Posture:
-    return Posture(protraction_deg=angle, yaw_deg=90.0 if view == "side" else 0.0)
+def _posture(view: str, angle: float, **overrides) -> Posture:
+    return Posture(
+        protraction_deg=angle, yaw_deg=90.0 if view == "side" else 0.0, **overrides
+    )
 
 
-def _series(view: str, angle: float, n: int = 90, seed: int = 0, **kw):
-    return synth_series(angle, n=n, seed=seed, posture=_posture(view, 0.0), **kw)
+def _series(view: str, angle: float, n: int = 90, seed: int = 0, pose=None, **kw):
+    # A side camera set up properly has the hip in shot, which is what lets the
+    # pelvis-referenced features separate protraction from forward head posture.
+    # A laptop webcam does not, so the frontal run keeps the default.
+    kw.setdefault("hip_visibility", 0.95 if view == "side" else 0.25)
+    return synth_series(
+        angle, n=n, seed=seed, posture=_posture(view, 0.0, **(pose or {})), **kw
+    )
 
 
 def run_selftest(view: str = "side") -> list[Check]:
@@ -69,6 +77,46 @@ def run_selftest(view: str = "side") -> list[Check]:
     )
     ok, note = verdict(profile, feature_set)
     checks.append(Check("calibration verdict", ok, note))
+
+    # Does the profile actually watch the shoulders, or has it quietly settled
+    # for tracking the head that happens to move along with them?
+    on_target = float(sum(profile.weights[i] for i in feature_set.primary))
+    checks.append(
+        Check(
+            "weight sits on protraction itself",
+            on_target >= 0.15 if view == "side" else True,
+            f"{on_target:.0%} of the weight is on {', '.join(feature_set.names[i] for i in feature_set.primary)}"
+            + ("" if view == "side" else " (frontal cannot do better; see the verdict)"),
+        )
+    )
+
+    def median_score(**kwargs) -> float:
+        samples = collect_samples(_series(view, **kwargs), feature_set)
+        return float(np.median([score(profile, v) or np.nan for v in samples.values]))
+
+    # Two ways a posture score can lie, and they pull in opposite directions.
+    # First: shoulders still rolled forward, but the chin tucked back. The score
+    # must stay high, or you could buy your way out with your neck.
+    tucked = median_score(angle=SLOUCH_ANGLE, n=40, seed=6, pose={"head_forward_m": -0.06})
+    checks.append(
+        Check(
+            "a tucked chin does not excuse forward shoulders",
+            tucked > 0.6,
+            f"shoulders slouched, head pulled back: scores {tucked:+.2f} (slouch is ~1.0)",
+        )
+    )
+
+    # Second: shoulders where you want them, head craning at the screen. This is
+    # the posture every forward-head-posture app is built to catch, and it must
+    # not read as perfect here either.
+    craning = median_score(angle=GOOD_ANGLE, n=40, seed=7, pose={"head_forward_m": 0.07})
+    checks.append(
+        Check(
+            "forward head posture is not scored as good posture",
+            craning > 0.25,
+            f"shoulders good, head 7cm forward: scores {craning:+.2f} (good is ~0.0)",
+        )
+    )
 
     # 2. Anchors -----------------------------------------------------------
     good_score = float(np.median([score(profile, v) or np.nan for v in good.values]))

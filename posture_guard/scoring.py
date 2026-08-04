@@ -23,7 +23,9 @@ import numpy as np
 
 from .geometry import median_abs_deviation
 
-PROFILE_VERSION = 1
+# Bumped whenever a feature set changes shape. An old profile's weights would
+# line up against the wrong features, so it is refused rather than reinterpreted.
+PROFILE_VERSION = 2
 
 # A feature must separate the two postures by at least this many noise widths
 # before it is allowed to contribute at all.
@@ -35,6 +37,15 @@ MAX_SEPARATION = 5.0
 MIN_COVERAGE = 0.5
 # A live frame needs this share of the profile's total weight to be scoreable.
 MIN_LIVE_WEIGHT = 0.4
+# Features never agree perfectly, so disagreement is only treated as evidence of
+# an off-axis posture once it exceeds what was seen during calibration -- with a
+# floor, because two held poses understate the disagreement of ordinary sitting.
+MIN_DISAGREEMENT_REF = 0.35
+# On-axis postures disagree by 0.05 to 0.16 against the synthetic model, so the
+# floor above already carries better than twice the headroom it needs. The gain
+# only ever multiplies what is left after subtracting the reference, so raising
+# it sharpens genuinely off-axis postures without moving on-axis ones at all.
+DISAGREEMENT_GAIN = 1.5
 
 
 class CalibrationError(RuntimeError):
@@ -53,6 +64,10 @@ class Profile:
     weights: np.ndarray
     n_good: int
     n_bad: int
+    #: How much the features disagreed with each other during calibration.
+    #: Anything beyond this means the posture is not on the line between your two
+    #: demonstrated poses -- see :func:`score`.
+    disagreement_ref: float = MIN_DISAGREEMENT_REF
     created: float = field(default_factory=time.time)
     version: int = PROFILE_VERSION
 
@@ -105,6 +120,7 @@ class Profile:
             names=tuple(payload["names"]),
             n_good=payload["n_good"],
             n_bad=payload["n_bad"],
+            disagreement_ref=payload.get("disagreement_ref", MIN_DISAGREEMENT_REF),
             created=payload["created"],
             version=payload["version"],
             **arrays,
@@ -133,8 +149,13 @@ def fit_profile(
     bad: np.ndarray,
     *,
     min_separation: float = MIN_SEPARATION,
+    prior: np.ndarray | tuple[float, ...] | None = None,
 ) -> Profile:
-    """Build a profile from two stacks of feature vectors."""
+    """Build a profile from two stacks of feature vectors.
+
+    ``prior`` lets the feature set express what separation cannot: whether a
+    feature measures what its name claims. See :class:`features.FeatureSet`.
+    """
     good = np.atleast_2d(np.asarray(good, float))
     bad = np.atleast_2d(np.asarray(bad, float))
     if good.shape[1] != len(names) or bad.shape[1] != len(names):
@@ -160,6 +181,11 @@ def fit_profile(
 
     raw = np.clip(np.nan_to_num(separation, nan=0.0), 0.0, MAX_SEPARATION) - min_separation
     raw = np.clip(raw, 0.0, None)
+    if prior is not None:
+        prior = np.asarray(prior, float)
+        if prior.shape != raw.shape:
+            raise ValueError("prior does not match the feature set")
+        raw = raw * prior
     total = raw.sum()
     if total <= 0:
         best = np.nanmax(separation) if np.any(np.isfinite(separation)) else 0.0
@@ -170,7 +196,7 @@ def fit_profile(
             "`posture-guard calibrate --view side`."
         )
 
-    return Profile(
+    profile = Profile(
         view=view,
         names=tuple(names),
         good_med=good_med,
@@ -182,30 +208,102 @@ def fit_profile(
         n_good=int(good.shape[0]),
         n_bad=int(bad.shape[0]),
     )
+    profile.disagreement_ref = _calibration_disagreement(profile, good, bad)
+    return profile
 
 
-def score(profile: Profile, values: np.ndarray) -> float | None:
-    """Position of one feature vector between good (0) and slouched (1).
+def _calibration_disagreement(profile: Profile, good: np.ndarray, bad: np.ndarray) -> float:
+    """How far apart the features sat while you were holding a pose on purpose.
+
+    This is the yardstick for judging disagreement later. Taken high in the
+    distribution rather than at the median, because the occasional noisy frame
+    should not be enough to trip the off-axis penalty, and floored because two
+    carefully held poses understate how much ordinary sitting varies.
+    """
+    observed = []
+    for row in np.vstack([good, bad]):
+        parts = score_parts(profile, row)
+        if parts is not None:
+            observed.append(parts.disagreement)
+    if not observed:
+        return MIN_DISAGREEMENT_REF
+    return float(max(MIN_DISAGREEMENT_REF, np.percentile(observed, 95)))
+
+
+@dataclass(frozen=True)
+class ScoreParts:
+    """A score broken into the two things it is made of."""
+
+    value: float  # what the rest of the app uses
+    axis: float  # position along good -> slouch
+    disagreement: float  # how much the features contradict each other
+    penalty: float  # what that disagreement added
+    per_feature: np.ndarray  # each feature's own verdict, for diagnostics
+
+
+def score_parts(profile: Profile, values: np.ndarray) -> ScoreParts | None:
+    """Score one feature vector, and show the working.
+
+    Averaging the features gives a position on the line between your two
+    calibrated postures. That is the right answer for postures that lie on that
+    line, and a misleading one for postures that do not.
+
+    Craning at the screen with your shoulders back is the case that matters here.
+    Measured against the ear, the shoulder now sits *behind* where it does in
+    your good posture, so ``shoulder_ahead`` and ``neck_incline`` report better
+    than perfect while ``head_over_hip`` reports fully slouched. Averaged, they
+    cancel and the app calls it good posture.
+
+    What gives it away is not the average but the argument: features that agree
+    within a few percent for every on-axis posture are suddenly a full scale
+    apart. So the spread across features is measured too, and anything beyond
+    what calibration saw is added to the score. A posture nobody demonstrated is
+    not assumed to be a good one.
 
     Returns None when too little of the profile's weight is available in this
-    frame, which is the honest answer -- better than a confident number built
-    from one surviving feature.
+    frame -- better than a confident number built from one surviving feature.
     """
     values = np.asarray(values, float)
+    if values.shape[-1] != len(profile.names):
+        raise ValueError(
+            f"profile has {len(profile.names)} features but the frame produced "
+            f"{values.shape[-1]}; the feature set changed, so recalibrate"
+        )
     delta = profile.delta
     usable = profile.usable & np.isfinite(values) & np.isfinite(delta) & (np.abs(delta) > 0)
     if not usable.any():
         return None
 
     w = profile.weights[usable]
-    if w.sum() < MIN_LIVE_WEIGHT:
+    total = w.sum()
+    if total < MIN_LIVE_WEIGHT:
         return None
 
     per_feature = (profile.good_med[usable] - values[usable]) / delta[usable]
     # Allow some headroom past both anchors: sitting up straighter than your own
     # demonstration is real, and so is slouching worse than you showed.
     per_feature = np.clip(per_feature, -0.5, 1.5)
-    return float(np.dot(w, per_feature) / w.sum())
+    axis = float(np.dot(w, per_feature) / total)
+
+    disagreement = float(np.sqrt(np.dot(w, (per_feature - axis) ** 2) / total))
+    penalty = max(0.0, disagreement - profile.disagreement_ref) * DISAGREEMENT_GAIN
+    value = float(np.clip(axis + penalty, -0.5, 1.5))
+
+    full = np.full(len(profile.names), np.nan)
+    full[usable] = per_feature
+    return ScoreParts(
+        value=value,
+        axis=axis,
+        disagreement=disagreement,
+        penalty=penalty,
+        per_feature=full,
+    )
+
+
+def score(profile: Profile, values: np.ndarray) -> float | None:
+    """Position between your good posture (0) and your slouch (1)."""
+    parts = score_parts(profile, values)
+    return None if parts is None else parts.value
 
 
 class Scorer:

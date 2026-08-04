@@ -9,6 +9,7 @@ from posture_guard.scoring import (
     Scorer,
     fit_profile,
     score,
+    score_parts,
 )
 
 NAMES = ("a", "b", "c")
@@ -92,6 +93,103 @@ class TestScoring:
         assert score(profile, np.full(3, np.nan)) is None
 
 
+class TestOffAxisPostures:
+    """A posture nobody demonstrated must not be assumed to be a good one.
+
+    Averaging the features places you on the line between your two calibrated
+    poses. Step off that line -- shoulders back but head craning forward -- and
+    the features start contradicting each other, one reporting better than
+    perfect while another reports fully slouched. The average hides it; the
+    spread does not.
+    """
+
+    def sep(self):
+        return make([10.0, 2.0, 3.0], [5.0, 1.0, 6.0])
+
+    def test_features_that_agree_are_left_alone(self):
+        profile = self.sep()
+        for fraction in (0.0, 0.25, 0.5, 0.75, 1.0):
+            values = np.array([10 - 5 * fraction, 2 - fraction, 3 + 3 * fraction])
+            parts = score_parts(profile, values)
+            assert parts.disagreement < 0.05
+            assert parts.penalty == 0.0
+            assert parts.value == pytest.approx(parts.axis)
+
+    def test_contradicting_features_push_the_score_up(self):
+        profile = self.sep()
+        # a and b say "good posture", c says "fully slouched".
+        parts = score_parts(profile, np.array([10.0, 2.0, 6.0]))
+        assert parts.axis == pytest.approx(1 / 3, abs=0.05)
+        assert parts.disagreement > 0.4
+        assert parts.penalty > 0.0
+        assert parts.value > parts.axis
+
+    def test_the_penalty_cannot_run_away(self):
+        profile = self.sep()
+        parts = score_parts(profile, np.array([1e6, -1e6, 6.0]))
+        assert parts.value <= 1.5
+
+    def test_the_reference_is_measured_during_calibration(self):
+        """A user whose features are noisy gets a correspondingly higher bar."""
+        rng = np.random.default_rng(3)
+        tidy = fit_profile(
+            "side", NAMES,
+            rng.normal([10.0, 2.0, 3.0], 0.02, (60, 3)),
+            rng.normal([5.0, 1.0, 6.0], 0.02, (60, 3)),
+        )
+        assert tidy.disagreement_ref == pytest.approx(0.35), "floored, never below"
+
+    def test_parts_expose_the_per_feature_verdicts(self):
+        profile = self.sep()
+        parts = score_parts(profile, np.array([10.0, 2.0, 6.0]))
+        assert parts.per_feature.shape == (3,)
+        assert parts.per_feature[0] == pytest.approx(0.0, abs=0.05)
+        assert parts.per_feature[2] == pytest.approx(1.0, abs=0.05)
+
+    def test_an_unscoreable_frame_has_no_parts(self):
+        assert score_parts(self.sep(), np.full(3, np.nan)) is None
+
+    def test_a_feature_set_of_the_wrong_size_is_refused(self):
+        with pytest.raises(ValueError, match="recalibrate"):
+            score_parts(self.sep(), np.array([1.0, 2.0]))
+
+
+class TestPrior:
+    """Separation says how well a feature splits your poses, not whether it means
+    what its name says. The prior is where that second question gets a vote."""
+
+    def test_it_shifts_weight_between_equally_separating_features(self):
+        rng = np.random.default_rng(4)
+        good = rng.normal([10.0, 10.0, 10.0], 0.05, (40, 3))
+        bad = rng.normal([5.0, 5.0, 5.0], 0.05, (40, 3))
+        flat = fit_profile("side", NAMES, good, bad)
+        weighted = fit_profile("side", NAMES, good, bad, prior=(1.0, 0.5, 0.5))
+
+        assert flat.weights == pytest.approx(flat.weights[0], rel=0.01)
+        assert weighted.weights[0] > weighted.weights[1]
+        assert weighted.weights.sum() == pytest.approx(1.0)
+
+    def test_a_zero_prior_removes_a_feature(self):
+        profile = make([10.0, 2.0, 3.0], [5.0, 1.0, 6.0])
+        muted = fit_profile(
+            "side", NAMES,
+            np.random.default_rng(5).normal([10.0, 2.0, 3.0], 0.05, (40, 3)),
+            np.random.default_rng(6).normal([5.0, 1.0, 6.0], 0.05, (40, 3)),
+            prior=(1.0, 1.0, 0.0),
+        )
+        assert profile.weights[2] > 0
+        assert muted.weights[2] == 0.0
+
+    def test_a_mismatched_prior_is_rejected(self):
+        with pytest.raises(ValueError, match="prior does not match"):
+            fit_profile(
+                "side", NAMES,
+                np.random.default_rng(7).normal([10.0, 2.0, 3.0], 0.05, (40, 3)),
+                np.random.default_rng(8).normal([5.0, 1.0, 6.0], 0.05, (40, 3)),
+                prior=(1.0, 1.0),
+            )
+
+
 class TestSmoothing:
     def test_first_reading_is_taken_as_is(self):
         profile = make([10.0, 2.0, 5.0], [5.0, 1.0, 5.0])
@@ -136,7 +234,7 @@ class TestSerialisation:
 
     def test_a_future_version_is_refused_loudly(self):
         profile = make([10.0, 2.0, 5.0], [5.0, 1.0, 5.0])
-        raw = profile.to_json().replace('"version": 1', '"version": 99')
+        raw = profile.to_json().replace('"version": 2', '"version": 99')
         with pytest.raises(ValueError, match="calibrate"):
             Profile.from_json(raw)
 
