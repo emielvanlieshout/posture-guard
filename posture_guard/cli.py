@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import time
 import webbrowser
@@ -11,6 +12,7 @@ from pathlib import Path
 
 import numpy as np
 
+from . import __version__
 from . import config as cfgmod
 from . import permissions
 from .calibration import build_profile, collect_samples, verdict
@@ -357,10 +359,26 @@ def cmd_calibrate(args) -> int:
 
 def cmd_run(args) -> int:
     from .app import Runner, run_headless
+    from .trace import Trace, announce_running, looks_bundled
+
+    bundled = looks_bundled()
+    trace = Trace(verbose=args.debug)
+    trace.step(
+        f"posture-guard {__version__} starting  pid={os.getpid()}  "
+        f"{'from the app bundle' if bundled else 'from a shell'}"
+    )
+    trace.step(f"python {sys.version.split()[0]} at {sys.executable}")
 
     cfg = _load_config()
+    trace.step(f"config: view={cfg.view} camera={cfg.camera_index} alerters={cfg.alerters}")
     profile = _load_profile()
+    trace.step(
+        f"calibration: {profile.view} view, "
+        f"{(time.time() - profile.created) / 86400:.0f} days old"
+    )
     model = _require_model()
+    trace.step(f"model: {model.stat().st_size / 1e6:.1f} MB")
+    trace.step(f"camera permission: {permissions.camera_status()}")
     _require_camera_permission()
 
     if profile.view != cfg.view:
@@ -538,6 +556,34 @@ def cmd_report(args) -> int:
     return 0
 
 
+def cmd_app_log(args) -> int:
+    """Show what the bundled app wrote, since it has no terminal to write to."""
+    from .macapp import log_path
+
+    path = log_path()
+    if not path.exists():
+        print(f"no log at {path}, so the app has never started")
+        return 1
+    if not args.follow:
+        text = path.read_text(errors="replace").splitlines()
+        for line in text[-args.lines :]:
+            print(line)
+        return 0
+
+    print(f"following {path}, ctrl-c to stop")
+    with path.open(errors="replace") as handle:
+        handle.seek(0, 2)
+        try:
+            while True:
+                line = handle.readline()
+                if line:
+                    print(line.rstrip())
+                else:
+                    time.sleep(0.3)
+        except KeyboardInterrupt:
+            return 0
+
+
 def cmd_pause(args) -> int:
     from .app import _clear_pause_flag, _write_pause_flag
 
@@ -637,6 +683,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="print a live score readout, to see it reacting to you",
     )
+    p.add_argument(
+        "--debug",
+        action="store_true",
+        help="log every frame's score or rejection reason, not just the startup steps",
+    )
     p.set_defaults(func=cmd_run)
 
     p = sub.add_parser("preview", help="live landmarks and features, for aiming the camera")
@@ -656,6 +707,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--html", nargs="?", const="posture-report.html", help="write an HTML report")
     p.add_argument("--open", action="store_true", help="open the HTML report in a browser")
     p.set_defaults(func=cmd_report)
+
+    p = sub.add_parser("app-log", help="show what the bundled app logged")
+    p.add_argument("-f", "--follow", action="store_true", help="keep watching for new lines")
+    p.add_argument("-n", "--lines", type=int, default=40, help="how many lines to show")
+    p.set_defaults(func=cmd_app_log)
 
     p = sub.add_parser("pause", help="stop alerting for a while")
     p.add_argument("minutes", type=float, nargs="?", default=30.0)

@@ -53,8 +53,17 @@ class Worker(threading.Thread):
 
     daemon = True
 
-    def __init__(self, cfg: Config, profile: Profile, store: Store, shared: Shared, model_path: Path):
+    def __init__(
+        self,
+        cfg: Config,
+        profile: Profile,
+        store: Store,
+        shared: Shared,
+        model_path: Path,
+        trace=None,
+    ):
         super().__init__(name="posture-capture")
+        self.trace = trace
         self.cfg = cfg
         self.profile = profile
         self.store = store
@@ -88,10 +97,16 @@ class Worker(threading.Thread):
             fps=self.cfg.fps,
         )
         try:
+            if self.trace:
+                self.trace.step(f"opening camera {self.cfg.camera_index}")
             with source:
+                if self.trace:
+                    self.trace.step("camera open, waiting for a pose")
                 self._loop(source)
         except Exception as exc:  # noqa: BLE001 - surfaced to the main thread
             self.shared.error = str(exc)
+            if self.trace:
+                self.trace.step(f"capture stopped: {exc}")
         finally:
             try:
                 self.aggregator.flush()
@@ -100,6 +115,7 @@ class Worker(threading.Thread):
 
     def _loop(self, source) -> None:
         previous = None
+        announced = False
         for frame in source.frames():
             if self.stop_event.is_set():
                 return
@@ -113,6 +129,17 @@ class Worker(threading.Thread):
                 sample = self.feature_set.extract(frame, self.limits)
                 if sample.ok:
                     score = self.scorer.update(now, sample.values)
+                if self.trace and not announced:
+                    announced = True
+                    self.trace.step(
+                        f"first pose detected, score {score:.2f}"
+                        if score is not None
+                        else f"first pose detected but unusable: {sample.reason}"
+                    )
+                elif self.trace:
+                    self.trace.detail(
+                        f"score {score:.2f}" if score is not None else f"rejected: {sample.reason}"
+                    )
 
             self._sync_pause(now)
             tick = self.monitor.update(now, score)
@@ -160,13 +187,22 @@ class Worker(threading.Thread):
 class Runner:
     """Owns the worker and the alerters. ``pump`` must be called on the main thread."""
 
-    def __init__(self, cfg: Config, profile: Profile, store: Store, model_path: Path, log=print):
+    def __init__(
+        self,
+        cfg: Config,
+        profile: Profile,
+        store: Store,
+        model_path: Path,
+        log=print,
+        trace=None,
+    ):
         self.cfg = cfg
         self.profile = profile
         self.store = store
         self.log = log
+        self.trace = trace
         self.shared = Shared()
-        self.worker = Worker(cfg, profile, store, self.shared, model_path)
+        self.worker = Worker(cfg, profile, store, self.shared, model_path, trace=trace)
         self.alerters: list[SafeAlerter] = build_alerters(cfg, on_error=log)
         self._started = False
         self._reported_error = False

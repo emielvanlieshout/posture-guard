@@ -371,6 +371,31 @@ logs to `~/Library/Logs/posture-guard.log`.
 Open it once from Finder so macOS can ask for the camera. Rebuild it after
 upgrading with the same command.
 
+**When it appears not to start.** It has no window and no Dock icon by design,
+and the menu bar item is one character wide — on a laptop with a notch and a
+dozen other menu bar items it can be genuinely invisible. So the app posts a
+notification when it comes up, and every startup step goes to the log:
+
+```bash
+posture-guard app-log            # what it wrote
+posture-guard app-log -f         # keep watching
+```
+
+```
+[09:14:02] posture-guard 0.1.0 starting  pid=8412  from the app bundle
+[09:14:02] config: view=frontal camera=0 alerters=['dim']
+[09:14:02] calibration: frontal view, 0 days old
+[09:14:02] camera permission: authorized
+[09:14:03] opening camera 0
+[09:14:04] camera open, waiting for a pose
+[09:14:05] first pose detected, score 0.31
+[09:14:05] starting the menu bar
+```
+
+The last line is how far it got. `posture-guard run --debug` adds every frame's
+score or rejection reason, which is more than you want in normal use and exactly
+what you want when it is misbehaving.
+
 Unsigned, so it is fine for your own machine and Gatekeeper will stop anyone
 else opening it without a right-click → Open. Signing it properly needs a paid
 Apple developer account.
@@ -450,7 +475,7 @@ profile, model and history. Uninstalling is deleting that directory.
 
 ```bash
 pip install -e ".[dev]"
-pytest -q                            # 302 tests, no camera needed
+pytest -q                            # 319 tests, no camera needed
 posture-guard selftest               # end-to-end on synthetic data
 ```
 
