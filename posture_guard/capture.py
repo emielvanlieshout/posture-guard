@@ -12,6 +12,7 @@ neither installed.
 from __future__ import annotations
 
 import time
+from contextlib import contextmanager
 from typing import Iterator
 
 import numpy as np
@@ -176,11 +177,15 @@ def _to_pose_frame(result, ts: float, width: int, height: int) -> PoseFrame | No
     return PoseFrame(ts=ts, xy=xy, visibility=visibility, world=world)
 
 
-def list_cameras(limit: int = 5) -> list[int]:
+def list_cameras(limit: int = 5, indices: list[int] | None = None) -> list[int]:
     """Indices that actually open. Used by `posture-guard doctor`.
 
-    Skipped entirely when macOS has refused camera access: probing would emit a
-    backend error per index and still tell you nothing you did not already know.
+    Pass ``indices`` when the platform can already enumerate its cameras.
+    Probing a blind range past the last real device just prints "out device of
+    bound" once per miss, which reads like a fault and is not one.
+
+    Skipped entirely when macOS has refused access: probing would emit a backend
+    error per index and still tell you nothing you did not already know.
     """
     from .permissions import AUTHORIZED, UNAVAILABLE, camera_status  # noqa: PLC0415
 
@@ -191,11 +196,31 @@ def list_cameras(limit: int = 5) -> list[int]:
     import cv2  # noqa: PLC0415
 
     found = []
-    for index in range(limit):
-        cap = cv2.VideoCapture(index)
-        try:
-            if cap.isOpened() and cap.read()[0]:
-                found.append(index)
-        finally:
-            cap.release()
+    # An index that does not answer is the expected outcome here, not a fault,
+    # but OpenCV logs each one as an error and a backtrace. Muted for the probe
+    # only; capture itself keeps the normal log level so real faults still speak.
+    with _quiet_opencv():
+        for index in indices if indices is not None else range(limit):
+            cap = cv2.VideoCapture(index)
+            try:
+                if cap.isOpened() and cap.read()[0]:
+                    found.append(index)
+            finally:
+                cap.release()
     return found
+
+
+@contextmanager
+def _quiet_opencv():
+    try:
+        from cv2.utils import logging as cv_logging  # noqa: PLC0415
+    except ImportError:
+        yield
+        return
+
+    previous = cv_logging.getLogLevel()
+    cv_logging.setLogLevel(cv_logging.LOG_LEVEL_SILENT)
+    try:
+        yield
+    finally:
+        cv_logging.setLogLevel(previous)

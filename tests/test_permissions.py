@@ -207,6 +207,30 @@ class TestProbing:
         assert capture.list_cameras(limit=3) == []
         assert tried == [0, 1, 2]
 
+    def test_only_the_known_indices_are_probed(self, monkeypatch):
+        """Probing past the last real device prints an alarming non-error."""
+        from posture_guard import capture
+
+        monkeypatch.setattr(permissions, "camera_status", lambda: AUTHORIZED)
+        tried = []
+
+        class FakeCapture:
+            def __init__(self, index, *args):
+                tried.append(index)
+
+            def isOpened(self):  # noqa: N802
+                return True
+
+            def read(self):
+                return True, object()
+
+            def release(self):
+                pass
+
+        monkeypatch.setattr("cv2.VideoCapture", FakeCapture, raising=False)
+        assert capture.list_cameras(indices=[0, 1]) == [0, 1]
+        assert tried == [0, 1], "must not wander past what the system reported"
+
 
 class TestCliGate:
     def test_a_denied_camera_exits_with_instructions(self, monkeypatch):

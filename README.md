@@ -111,6 +111,11 @@ overlay and the menu bar are macOS-only.
 > terminal completely (Cmd-Q) and reopen it** — a permission change does not
 > reach a process that is already running.
 
+> **`AVCaptureDeviceTypeExternal is deprecated for Continuity Cameras`** is
+> macOS talking to itself, not a fault. It appears once when `doctor` lists your
+> cameras. The deprecated call is kept on purpose: its ordering is the one
+> OpenCV indexes by, and a correct index matters more than a tidy log line.
+
 > **`CERTIFICATE_VERIFY_FAILED` during setup** means this Python has no CA
 > bundle — normal on a fresh python.org, pyenv or conda install, which ignore
 > the macOS keychain. `setup` uses `certifi` to avoid it, so
@@ -371,7 +376,7 @@ profile, model and history. Uninstalling is deleting that directory.
 
 ```bash
 pip install -e ".[dev]"
-pytest -q                            # 242 tests, no camera needed
+pytest -q                            # 243 tests, no camera needed
 posture-guard selftest               # end-to-end on synthetic data
 ```
 

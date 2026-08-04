@@ -128,7 +128,11 @@ def cmd_setup(args) -> int:
 
 def cmd_doctor(args) -> int:
     cfg = _load_config()
-    ok = True
+    # Something being broken and something not being done yet are different
+    # answers, and a first run is all of the latter. Reporting "some checks
+    # failed" because you have not calibrated is just wrong.
+    broken: list[str] = []
+    pending: list[str] = []
 
     print(f"platform          {sys.platform}")
     print(f"python            {sys.version.split()[0]}")
@@ -140,7 +144,7 @@ def cmd_doctor(args) -> int:
             print(f"{label:<18}{getattr(mod, '__version__', 'installed')}")
         except ImportError:
             print(f"{label:<18}MISSING  (pip install 'posture-guard[macos]')")
-            ok = False
+            broken.append(f"install {label}")
 
     if sys.platform == "darwin":
         for label, module in (("rumps", "rumps"), ("pyobjc AppKit", "AppKit")):
@@ -149,7 +153,7 @@ def cmd_doctor(args) -> int:
                 print(f"{label:<18}installed")
             except ImportError:
                 print(f"{label:<18}MISSING  (needed for the menu bar and the dim overlay)")
-                ok = False
+                broken.append(f"install {label}")
 
     model = cfgmod.model_path()
     if model.exists():
@@ -168,7 +172,7 @@ def cmd_doctor(args) -> int:
                 "on a python.org or conda build: pip install certifi"
             )
         print(f"{'':<18}by hand: {manual_download_hint(model)}")
-        ok = False
+        pending.append("posture-guard setup")
 
     profile_file = cfgmod.profile_path()
     if profile_file.exists():
@@ -183,11 +187,12 @@ def cmd_doctor(args) -> int:
                 )
         except ValueError as exc:
             print(f"{'calibration':<18}unreadable: {exc}")
-            ok = False
+            broken.append("posture-guard calibrate")
     else:
-        print(f"{'calibration':<18}MISSING  (run `posture-guard calibrate`)")
-        ok = False
+        print(f"{'calibration':<18}not done yet")
+        pending.append("posture-guard calibrate")
 
+    devices: list[tuple[int, str]] = []
     if sys.platform == "darwin":
         # Asking outright beats probing and guessing from the failure. If macOS
         # has not put the question yet, this is where the prompt appears.
@@ -198,35 +203,49 @@ def cmd_doctor(args) -> int:
         print(f"{'camera access':<18}{status}")
         guidance = permissions.describe(status)
         if guidance:
-            ok = ok and status == permissions.UNAVAILABLE
+            if status not in (permissions.AUTHORIZED, permissions.UNAVAILABLE):
+                broken.append("grant camera access")
             for line in guidance.splitlines():
                 print(f"{'':<18}{line}")
 
-        for index, name in permissions.list_video_devices():
+        # Enumerated once and reused: on a Mac with a Continuity Camera this
+        # call makes macOS log a deprecation notice, and doing it twice per run
+        # would print it twice.
+        devices = permissions.list_video_devices()
+        for index, name in devices:
             marker = "  <- config uses this" if index == cfg.camera_index else ""
             print(f"{'':<18}[{index}] {name}{marker}")
 
     try:
         from .capture import list_cameras
 
-        cameras = list_cameras()
+        # Probe the devices macOS actually reports rather than a blind range;
+        # anything past the end just prints "out device of bound" and worries you.
+        known = [index for index, _ in devices]
+        cameras = list_cameras(indices=known or None)
         if cameras:
             print(f"{'cameras opened':<18}indices {cameras} (config uses {cfg.camera_index})")
             if cfg.camera_index not in cameras:
                 print(f"{'':<18}camera {cfg.camera_index} did not open")
-                ok = False
+                broken.append(f"pick a camera that opens: config --set camera_index=<n>")
         else:
             print(f"{'cameras opened':<18}none")
             if sys.platform != "darwin":
                 print(f"{'':<18}check that a camera is connected and not in use")
-            ok = False
+            broken.append("get a camera working")
     except ImportError:
         print(f"{'cameras opened':<18}skipped (opencv missing)")
-        ok = False
+        broken.append("install opencv")
 
     print()
-    print("all good" if ok else "some checks failed, see above")
-    return 0 if ok else 1
+    if broken:
+        print("problems to fix: " + ", ".join(broken))
+        return 1
+    if pending:
+        print("nothing broken. next: " + "  then  ".join(pending))
+        return 0
+    print("all good")
+    return 0
 
 
 def cmd_calibrate(args) -> int:
