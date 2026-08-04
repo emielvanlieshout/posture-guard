@@ -195,9 +195,18 @@ that puts the camera image on screen; monitoring never does.
 ## Calibrating
 
 ```bash
-posture-guard calibrate            # uses the configured view
-posture-guard calibrate --view frontal
+posture-guard calibrate            # opens a window on macOS
+posture-guard calibrate --terminal # countdown in the shell instead
 ```
+
+On macOS this opens a window with the live camera in it, which matters more
+than it sounds. Posing at a camera you cannot see means finding out twelve
+seconds later that every frame was rejected; here the frame in front of you is
+judged as you sit, in plain words — *no-one in view*, *face the camera
+squarely*, *this camera is looking at your front* — and usable frames are
+counted as they arrive. A badly placed camera becomes something you fix during
+the countdown. The menu bar has a **Calibrate…** item that opens the same
+window.
 
 You hold two poses for 12 seconds each: the posture you want, then the slouch
 you actually sit in. Everything is anchored on those two, so **0 means you are
@@ -441,7 +450,7 @@ profile, model and history. Uninstalling is deleting that directory.
 
 ```bash
 pip install -e ".[dev]"
-pytest -q                            # 273 tests, no camera needed
+pytest -q                            # 302 tests, no camera needed
 posture-guard selftest               # end-to-end on synthetic data
 ```
 

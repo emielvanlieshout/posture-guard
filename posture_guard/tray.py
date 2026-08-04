@@ -46,6 +46,7 @@ def run_tray(runner: Runner, cfg: Config, report_path: Path) -> None:
                 rumps.MenuItem("Pause 60 minutes", callback=lambda _: self._pause(60)),
                 rumps.MenuItem("Resume now", callback=lambda _: runner.resume()),
                 None,
+                rumps.MenuItem("Calibrate…", callback=lambda _: self._calibrate()),
                 rumps.MenuItem("Open report", callback=lambda _: self._report()),
                 rumps.MenuItem("Quit", callback=self._quit),
             ]
@@ -55,6 +56,19 @@ def run_tray(runner: Runner, cfg: Config, report_path: Path) -> None:
 
         def _pause(self, minutes: int) -> None:
             runner.pause(minutes * 60)
+
+        def _calibrate(self) -> None:
+            from .config import model_path  # noqa: PLC0415
+            from .ui.calibrate_window import run_calibration_window  # noqa: PLC0415
+
+            def saved(profile) -> None:
+                rumps.alert(
+                    "Calibration saved",
+                    "Quit and reopen posture-guard for the new profile to take effect.",
+                )
+
+            # Returns immediately: this run loop drives the window.
+            run_calibration_window(cfg, model_path(), on_saved=saved)
 
         def _report(self) -> None:
             from .report import write_html  # noqa: PLC0415

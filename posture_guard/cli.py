@@ -266,6 +266,25 @@ def cmd_calibrate(args) -> int:
     _require_camera_permission()
     limits = cfg.quality_limits()
 
+    # A window shows you the camera while you pose and says what is wrong with
+    # the current frame, instead of reporting twelve seconds later that nothing
+    # was usable. The terminal flow stays for headless machines and scripts.
+    if not args.terminal and sys.platform == "darwin":
+        if cfg.view != view:
+            cfg.view = view
+            cfg.save()
+        try:
+            from .ui.calibrate_window import run_calibration_window
+        except ImportError as exc:
+            print(f"the calibration window needs pyobjc ({exc}); using the terminal flow")
+        else:
+            saved = run_calibration_window(cfg, model)
+            if saved:
+                print("calibration saved. Start monitoring with: posture-guard run")
+                return 0
+            print("calibration was not saved")
+            return 1
+
     print(f"Calibrating the {view} view — {feature_set.blurb}.")
     if view == "side":
         print(
@@ -604,6 +623,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="how many noise widths a feature must span to be used",
     )
     p.add_argument("--force", action="store_true", help="save even a weak profile")
+    p.add_argument(
+        "--terminal",
+        action="store_true",
+        help="use the countdown-in-the-terminal flow instead of the window",
+    )
     p.set_defaults(func=cmd_calibrate)
 
     p = sub.add_parser("run", help="start monitoring")
