@@ -73,11 +73,16 @@ def camera_status() -> str:
     return _STATUS_BY_CODE.get(int(code), UNAVAILABLE)
 
 
-def request_camera_access(timeout: float = 60.0) -> str:
+def request_camera_access(timeout: float = 15.0) -> str:
     """Raise the system prompt if it has not been answered, and wait for it.
 
     Returns the resulting status. Only NOT_DETERMINED can be moved by this;
     once refused, macOS will not ask again and only System Settings will do.
+
+    Pass ``timeout=0`` to raise the prompt and carry on without waiting. That
+    matters inside an app bundle: the dialog is driven by the main run loop, so
+    blocking the main thread on the answer can be the very thing that stops it
+    appearing.
     """
     status = camera_status()
     if status != NOT_DETERMINED:

@@ -120,3 +120,48 @@ class TestLoginItem:
 def test_the_default_home_needs_no_admin_rights():
     assert "Applications" in str(default_destination())
     assert str(default_destination()).startswith(str(__import__("pathlib").Path.home()))
+
+
+class TestFatalErrorsAreVisible:
+    """Launched from Finder there is no terminal, so stderr goes to a log file
+    nobody thinks to open and the app simply appears not to start."""
+
+    def test_a_message_is_shown_when_there_is_no_terminal(self, monkeypatch):
+        from posture_guard import cli
+
+        calls = []
+        monkeypatch.setattr(cli.sys, "platform", "darwin")
+        monkeypatch.setattr(cli.sys.stderr, "isatty", lambda: False, raising=False)
+        monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/osascript")
+        monkeypatch.setattr("subprocess.run", lambda cmd, **kw: calls.append(cmd))
+
+        cli._surface("pose model missing")
+        assert calls, "nothing was shown"
+        script = calls[0][-1]
+        assert "display alert" in script
+        assert "pose model missing" in script
+
+    def test_a_terminal_is_left_alone(self, monkeypatch):
+        from posture_guard import cli
+
+        calls = []
+        monkeypatch.setattr(cli.sys, "platform", "darwin")
+        monkeypatch.setattr(cli.sys.stderr, "isatty", lambda: True, raising=False)
+        monkeypatch.setattr("subprocess.run", lambda cmd, **kw: calls.append(cmd))
+
+        cli._surface("already printed to stderr")
+        assert not calls, "would be shown twice"
+
+    def test_quotes_cannot_break_out_of_the_script(self, monkeypatch):
+        from posture_guard import cli
+
+        calls = []
+        monkeypatch.setattr(cli.sys, "platform", "darwin")
+        monkeypatch.setattr(cli.sys.stderr, "isatty", lambda: False, raising=False)
+        monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/osascript")
+        monkeypatch.setattr("subprocess.run", lambda cmd, **kw: calls.append(cmd))
+
+        cli._surface('he said "no" \\ and left')
+        script = calls[0][-1]
+        assert script.count('"') % 2 == 0
+        assert '\\"no\\"' in script

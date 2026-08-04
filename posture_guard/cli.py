@@ -54,10 +54,12 @@ def _require_camera_permission() -> None:
     if status in (permissions.AUTHORIZED, permissions.UNAVAILABLE):
         return
     if status == permissions.NOT_DETERMINED:
+        # Ask, but carry on without waiting for the answer. Inside a bundle the
+        # prompt needs the main run loop, which is exactly what we would be
+        # blocking; and opening the camera raises it again anyway.
         print("asking macOS for camera access, approve the prompt…")
-        status = permissions.request_camera_access()
-        if status in (permissions.AUTHORIZED, permissions.UNAVAILABLE):
-            return
+        permissions.request_camera_access(timeout=0.0)
+        return
     raise SystemExit(f"camera access is {status}.\n{permissions.describe(status)}")
 
 
@@ -644,12 +646,42 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _surface(message: str) -> None:
+    """Put a failure somewhere the user will actually see it.
+
+    Launched from Finder there is no terminal, so a message on stderr goes into
+    a log file nobody thinks to open and the app simply appears not to start.
+    """
+    if sys.stderr.isatty() or sys.platform != "darwin":
+        return
+    import shutil
+    import subprocess
+
+    osascript = shutil.which("osascript")
+    if not osascript:
+        return
+    text = message.replace("\\", "\\\\").replace('"', '\\"')
+    subprocess.run(  # noqa: S603 - fixed binary, escaped literal
+        [osascript, "-e", f'display alert "posture-guard could not start" message "{text}"'],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         return args.func(args)
     except KeyboardInterrupt:
         return 130
+    except SystemExit as exc:
+        if isinstance(exc.code, str):
+            _surface(exc.code)
+        raise
+    except Exception as exc:  # noqa: BLE001 - re-raised after being surfaced
+        _surface(f"{type(exc).__name__}: {exc}")
+        raise
 
 
 if __name__ == "__main__":
