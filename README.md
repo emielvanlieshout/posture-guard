@@ -370,9 +370,18 @@ started it in.
 posture-guard install-app --login-item
 ```
 
-That writes `~/Applications/PostureGuard.app` — a launcher plus an Info.plist,
-not a vendored copy of Python, so the app and the `posture-guard` command remain
-the same program. It runs in the menu bar with no Dock icon, asks for the camera
+That writes `~/Applications/PostureGuard.app`: a small compiled executable, a
+launch script and an Info.plist — not a vendored copy of Python, so the app and
+the `posture-guard` command remain the same program.
+
+The executable has to be compiled, and that is not a detail. macOS only
+associates a running process with a bundle's Info.plist when the bundle's
+executable is a Mach-O binary. Put a shell script there and the app launches
+perfectly well, but TCC has no camera usage description to show, so the
+permission prompt never appears — the log reads *asking macOS for camera access*
+and then nothing, for ever. The twenty lines of C in `macapp.py` exist to be
+that binary and do nothing else. If no compiler is present, `install-app` falls
+back to the script and tells you to run `xcode-select --install`. It runs in the menu bar with no Dock icon, asks for the camera
 in its own name with a sentence explaining why, declares Continuity Camera
 support (which is what that deprecation warning in the logs is asking for), and
 logs to `~/Library/Logs/posture-guard.log`.
@@ -484,7 +493,7 @@ profile, model and history. Uninstalling is deleting that directory.
 
 ```bash
 pip install -e ".[dev]"
-pytest -q                            # 366 tests, no camera needed
+pytest -q                            # 371 tests, no camera needed
 posture-guard selftest               # end-to-end on synthetic data
 ```
 

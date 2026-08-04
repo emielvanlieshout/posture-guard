@@ -219,3 +219,97 @@ class TestLauncherOutputIsUsable:
         script = (bundle / "Contents" / "MacOS" / BUNDLE_NAME).read_text()
         assert "PYTHONUNBUFFERED=1" in script
         assert script.index("PYTHONUNBUFFERED") < script.index("exec $RUN")
+
+
+class TestBundleExecutable:
+    """macOS only associates a process with an Info.plist when the bundle's
+    executable is a Mach-O binary. With a shell script there the app launches
+    but TCC has no usage description to show, so the camera prompt silently
+    never appears -- which is exactly what happened."""
+
+    def test_the_launch_script_moves_to_resources(self, tmp_path):
+        from posture_guard.macapp import build_app
+
+        bundle = build_app(tmp_path / "P.app", python="/opt/py", arch="arm64")
+        script = bundle / "Contents" / "Resources" / "launch.sh"
+        assert script.is_file()
+        assert "posture_guard run" in script.read_text()
+        assert script.stat().st_mode & stat.S_IXUSR
+
+    def test_without_a_compiler_the_script_is_used_and_flagged(self, tmp_path):
+        from posture_guard.macapp import build_app, executable_kind
+
+        bundle = build_app(tmp_path / "P.app", python="/opt/py", arch="arm64", compile_stub=False)
+        assert executable_kind(bundle) == "shell script"
+        report = "\n".join(describe_install_of(bundle))
+        assert "cannot show the camera prompt" in report
+        assert "xcode-select --install" in report
+
+    def test_the_executable_is_always_runnable(self, tmp_path):
+        from posture_guard.macapp import build_app
+
+        bundle = build_app(tmp_path / "P.app", python="/opt/py", arch="arm64", compile_stub=False)
+        executable = bundle / "Contents" / "MacOS" / BUNDLE_NAME
+        assert executable.stat().st_mode & stat.S_IXUSR
+
+    def test_settings_are_still_reported_from_the_moved_script(self, tmp_path):
+        from posture_guard.macapp import build_app
+
+        bundle = build_app(tmp_path / "P.app", python="/opt/venv/bin/python", arch="x86_64")
+        report = "\n".join(describe_install_of(bundle))
+        assert "/opt/venv/bin/python" in report
+        assert "pinned to x86_64" in report
+
+    def test_a_missing_executable_is_named_not_guessed(self, tmp_path):
+        from posture_guard.macapp import build_app, executable_kind
+
+        bundle = build_app(tmp_path / "P.app", python="/opt/py", arch="arm64")
+        (bundle / "Contents" / "MacOS" / BUNDLE_NAME).unlink()
+        assert executable_kind(bundle) == "missing"
+
+
+def describe_install_of(bundle):
+    from posture_guard.macapp import describe_install
+
+    return describe_install(bundle)
+
+
+@pytest.mark.skipif(
+    __import__("sys").platform != "darwin", reason="the stub is macOS-only C"
+)
+class TestStubCompiles:
+    """Runs on the macOS CI runner, which is the only place it can."""
+
+    def test_it_compiles_without_warnings(self, tmp_path):
+        import subprocess
+
+        from posture_guard.macapp import STUB_SOURCE
+
+        result = subprocess.run(
+            ["clang", "-Wall", "-Wextra", "-Werror", "-o", str(tmp_path / "stub"), "-x", "c", "-"],
+            input=STUB_SOURCE, capture_output=True, text=True, check=False,
+        )
+        assert result.returncode == 0, result.stderr
+
+    def test_a_real_bundle_gets_a_real_binary(self, tmp_path):
+        from posture_guard.macapp import build_app, executable_kind
+
+        bundle = build_app(tmp_path / "P.app", python="/usr/bin/python3")
+        assert executable_kind(bundle) == "compiled stub"
+
+    def test_the_stub_hands_over_to_the_script(self, tmp_path):
+        """End to end: the compiled binary must find and run launch.sh."""
+        import subprocess
+
+        from posture_guard.macapp import BUNDLE_NAME, build_app
+
+        bundle = build_app(tmp_path / "P.app", python="/usr/bin/python3")
+        script = bundle / "Contents" / "Resources" / "launch.sh"
+        script.write_text('#!/bin/sh\necho "handed over with: $*"\n')
+        script.chmod(0o755)
+
+        result = subprocess.run(
+            [str(bundle / "Contents" / "MacOS" / BUNDLE_NAME), "an-argument"],
+            capture_output=True, text=True, timeout=30, check=False,
+        )
+        assert "handed over with: an-argument" in result.stdout

@@ -561,10 +561,20 @@ def cmd_install_app(args) -> int:
     register(bundle)
 
     from .arch import running_arch, under_rosetta
+    from .macapp import executable_kind
 
+    kind = executable_kind(bundle)
     print(f"built {bundle}")
     print(f"  runs {sys.executable} -m posture_guard run")
     print(f"  pinned to {running_arch()}")
+    print(f"  executable is a {kind}")
+    if kind != "compiled stub":
+        print(
+            "  WARNING: without a compiled executable macOS will not associate the\n"
+            "  process with this bundle, so the camera prompt cannot appear. Install\n"
+            "  the Xcode command line tools and run install-app again:\n"
+            "    xcode-select --install"
+        )
     if under_rosetta():
         print(
             "  WARNING: this shell is translated by Rosetta, so the app is pinned to\n"
