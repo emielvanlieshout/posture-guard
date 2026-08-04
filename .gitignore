@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.DS_Store
+
+# Pose model is downloaded by `posture-guard setup`, never committed.
+*.task
+
+# Never commit captured data or personal history.
+*.db
+*.db-journal
+report*.html

@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Start posture-guard at login.
+
+    1. edit the two paths below to match your checkout
+    2. cp scripts/com.posture-guard.plist ~/Library/LaunchAgents/
+    3. launchctl load ~/Library/LaunchAgents/com.posture-guard.plist
+
+  To stop it starting automatically:
+    launchctl unload ~/Library/LaunchAgents/com.posture-guard.plist
+
+  Note that launchd, not your terminal, becomes the app asking for camera
+  access, so macOS will prompt again the first time it runs this way.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.posture-guard</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/YOU/posture-guard/.venv/bin/posture-guard</string>
+    <string>run</string>
+  </array>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>KeepAlive</key>
+  <true/>
+
+  <key>StandardOutPath</key>
+  <string>/Users/YOU/Library/Logs/posture-guard.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/YOU/Library/Logs/posture-guard.log</string>
+</dict>
+</plist>
