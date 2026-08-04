@@ -138,6 +138,54 @@ class TestVerdict:
         assert "chin back" in note
 
 
+class TestFrontalOnlySetup:
+    """A laptop webcam and nothing else, which is most people."""
+
+    SHOULDERS_ONLY = dict(forward_coupling=0.0, pitch_coupling=0.0, rise_coupling=0.30)
+
+    def test_it_calibrates_on_shoulder_movement_alone(self):
+        """Hold the head still, move only the shoulders, and it still separates."""
+        good = collect_samples(series("frontal", 2.0, seed=1, pose=self.SHOULDERS_ONLY), FRONTAL)
+        bad = collect_samples(series("frontal", 26.0, seed=2, pose=self.SHOULDERS_ONLY), FRONTAL)
+        profile = build_profile(FRONTAL, good, bad)
+
+        # Elevation carries it; width contributes but cannot lead.
+        elevation = profile.weights[FRONTAL.names.index("neck_length")]
+        assert elevation > 0.5
+        assert np.nanmax(profile.separation) > 3.0
+
+    def test_the_score_is_monotonic_across_the_range(self):
+        good = collect_samples(series("frontal", 2.0, seed=1, pose=self.SHOULDERS_ONLY), FRONTAL)
+        bad = collect_samples(series("frontal", 26.0, seed=2, pose=self.SHOULDERS_ONLY), FRONTAL)
+        profile = build_profile(FRONTAL, good, bad)
+
+        def at(angle):
+            samples = collect_samples(
+                series("frontal", angle, n=40, seed=3, pose=self.SHOULDERS_ONLY), FRONTAL
+            )
+            return float(np.median([score(profile, v) for v in samples.values]))
+
+        # Between the two demonstrated postures, which is where the score is
+        # defined and where the alert thresholds live.
+        ladder = [at(a) for a in (0.0, 5.0, 10.0, 15.0, 20.0, 26.0)]
+        assert all(b > a for a, b in zip(ladder, ladder[1:])), ladder
+        assert ladder[0] < 0.1 and ladder[-1] > 0.9
+
+        # Past your own slouch it saturates rather than climbing, because the
+        # width features turn back on themselves up there. It must not fall.
+        assert at(30.0) > ladder[-1] - 0.1
+
+    def test_a_natural_calibration_resists_both_ways_of_cheating(self):
+        feature_set, _, _, profile = calibrate("frontal")
+
+        def median(angle, **pose):
+            samples = collect_samples(series("frontal", angle, n=40, seed=9, pose=pose), feature_set)
+            return float(np.median([score(profile, v) for v in samples.values]))
+
+        assert median(26.0, head_forward_m=-0.06) > 0.8, "tucking the chin must not excuse it"
+        assert median(2.0, head_forward_m=0.07) > 0.55, "craning must not pass as good posture"
+
+
 class TestHeadPositionEndToEnd:
     """The question the design has to answer: does it notice the head at all?"""
 

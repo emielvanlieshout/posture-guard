@@ -12,7 +12,7 @@ consumes an iterable of frames, so the tests drive it with the synthetic model.
 from __future__ import annotations
 
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Iterable
 
 import numpy as np
@@ -27,6 +27,8 @@ class Collected:
     values: np.ndarray  # (n_accepted, n_features)
     rejected: Counter
     seen: int
+    #: Median of each gate quantity across every frame, accepted or not.
+    metrics: dict = field(default_factory=dict)
 
     @property
     def accepted(self) -> int:
@@ -36,11 +38,76 @@ class Collected:
     def acceptance(self) -> float:
         return self.accepted / self.seen if self.seen else 0.0
 
+    @property
+    def worst_reason(self) -> str:
+        return self.rejected.most_common(1)[0][0] if self.rejected else ""
+
     def explain(self) -> str:
         if not self.rejected:
             return "every frame usable"
         worst = ", ".join(f"{reason} ({n})" for reason, n in self.rejected.most_common(3))
         return f"{self.accepted}/{self.seen} frames usable; discarded: {worst}"
+
+    def measured(self) -> str:
+        if not self.metrics:
+            return ""
+        return ", ".join(f"{name} {value:.2f}" for name, value in sorted(self.metrics.items()))
+
+
+def diagnose(feature_set: FeatureSet, collected: Collected, limits: QualityLimits) -> str:
+    """Say what the numbers mean and what to do, not merely that it failed.
+
+    "not a side view" is the same message whether the camera is pointed at your
+    face or the threshold is a shade too tight, and those need opposite actions.
+    The measured value tells them apart, so it goes in the advice.
+    """
+    reason = collected.worst_reason
+    metrics = collected.metrics
+
+    if feature_set.view == "side" and reason.startswith("not a side view"):
+        ratio = metrics.get("ear_over_face", float("nan"))
+        facing = abs(metrics.get("facing", float("nan")))
+        looks_frontal = ratio > limits.max_ear_over_face * 2 or facing < limits.min_facing / 2
+        if looks_frontal:
+            return (
+                f"Measured ear span {ratio:.2f} of face height (a profile is well under "
+                f"{limits.max_ear_over_face:.2f}) and facing {facing:.2f} (a profile is "
+                f"over {limits.min_facing:.2f}). This camera is looking at your front.\n"
+                "  Either point a camera at your side and select it:\n"
+                "    posture-guard doctor                        # lists cameras by name\n"
+                "    posture-guard config --set camera_index=N\n"
+                "  Or calibrate the built-in webcam instead, which measures the slouch\n"
+                "  complex rather than protraction itself:\n"
+                "    posture-guard calibrate --view frontal"
+            )
+        return (
+            f"Measured ear span {ratio:.2f} of face height, just over the "
+            f"{limits.max_ear_over_face:.2f} a profile should be under, with facing "
+            f"{facing:.2f}. The camera is close to side-on but not quite there. Rotate "
+            "your chair or the camera a little further, or loosen the gate:\n"
+            "    posture-guard config --set max_ear_over_face=1.0"
+        )
+
+    if reason.startswith("facing"):
+        return (
+            f"Measured facing {abs(metrics.get('facing', float('nan'))):.2f}, under the "
+            f"{limits.min_facing:.2f} needed to tell which way you are pointing. Move the "
+            "camera further round to your side."
+        )
+    if reason.startswith("head turned"):
+        return (
+            f"Measured yaw {abs(metrics.get('yaw', float('nan'))):.2f}, over the "
+            f"{limits.max_yaw:.2f} limit. Face the camera squarely while calibrating."
+        )
+    if reason.startswith("landmarks not visible"):
+        return (
+            f"Landmark visibility {metrics.get('visibility', float('nan')):.2f}, under "
+            f"{limits.min_visibility:.2f}. More light, or move so your whole upper body "
+            "is in frame."
+        )
+    if reason.startswith("nobody detected"):
+        return "No pose was found at all. Check `posture-guard preview` to see what the camera sees."
+    return ""
 
 
 def collect_samples(
@@ -52,6 +119,7 @@ def collect_samples(
     limits = limits or QualityLimits()
     rows: list[np.ndarray] = []
     rejected: Counter = Counter()
+    observed: dict[str, list[float]] = {}
     seen = 0
 
     for frame in frames:
@@ -64,9 +132,15 @@ def collect_samples(
             rows.append(sample.values)
         else:
             rejected[sample.reason or "rejected"] += 1
+        # Gathered from rejected frames too: when nothing passes, these are the
+        # only evidence of why.
+        for name, value in sample.metrics.items():
+            if np.isfinite(value):
+                observed.setdefault(name, []).append(float(value))
 
     values = np.array(rows, float) if rows else np.empty((0, feature_set.n))
-    return Collected(values=values, rejected=rejected, seen=seen)
+    metrics = {name: float(np.median(vals)) for name, vals in observed.items() if vals}
+    return Collected(values=values, rejected=rejected, seen=seen, metrics=metrics)
 
 
 def build_profile(
@@ -75,14 +149,18 @@ def build_profile(
     bad: Collected,
     *,
     min_separation: float = 1.0,
+    limits: QualityLimits | None = None,
 ) -> Profile:
     """Fit a profile, translating thin data into an actionable message."""
+    limits = limits or QualityLimits()
     for label, collected in (("good", good), ("slouched", bad)):
         if collected.accepted < 5:
+            advice = diagnose(feature_set, collected, limits)
             raise CalibrationError(
-                f"only {collected.accepted} usable frames for the {label} pose "
-                f"({collected.explain()}). Hold still, keep your whole head and both "
-                "shoulders in frame, and try again."
+                f"only {collected.accepted} usable frames for the {label} pose.\n"
+                f"  {collected.explain()}\n"
+                + (f"\n{advice}" if advice else "  Hold still and keep your whole upper "
+                   "body in frame, then try again.")
             )
     return fit_profile(
         feature_set.view,

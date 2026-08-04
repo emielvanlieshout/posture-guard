@@ -53,7 +53,7 @@ leaning toward the screen cannot masquerade as a change in posture.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable
 
 import numpy as np
@@ -106,21 +106,41 @@ class QualityLimits:
 
 @dataclass(frozen=True)
 class FeatureSample:
-    """Feature vector for one frame. Unavailable features are NaN, never zero."""
+    """Feature vector for one frame. Unavailable features are NaN, never zero.
+
+    ``metrics`` carries the quantities the gates judged, and is filled in whether
+    the frame passed or not. A rejection that only says "not a side view" leaves
+    you guessing whether the camera is in the wrong place or the threshold is
+    wrong; the measured value settles it.
+    """
 
     ts: float
     values: np.ndarray
     ok: bool
     reason: str = ""
-    pose_hint: float = math.nan  # yaw (frontal) or facing sign (side), for diagnostics
+    pose_hint: float = math.nan  # yaw (frontal) or facing sign (side)
+    metrics: dict[str, float] = field(default_factory=dict)
 
     @property
     def available(self) -> np.ndarray:
         return np.isfinite(self.values)
 
 
-def _empty(ts: float, n: int, reason: str, hint: float = math.nan) -> FeatureSample:
-    return FeatureSample(ts=ts, values=np.full(n, np.nan), ok=False, reason=reason, pose_hint=hint)
+def _empty(
+    ts: float,
+    n: int,
+    reason: str,
+    hint: float = math.nan,
+    metrics: dict[str, float] | None = None,
+) -> FeatureSample:
+    return FeatureSample(
+        ts=ts,
+        values=np.full(n, np.nan),
+        ok=False,
+        reason=reason,
+        pose_hint=hint,
+        metrics=metrics or {},
+    )
 
 
 _HEAD_CORE = (
@@ -147,8 +167,11 @@ def extract_frontal(frame: PoseFrame, limits: QualityLimits | None = None) -> Fe
     n = len(FRONTAL_FEATURES)
 
     core = (*_HEAD_CORE, LM.LEFT_SHOULDER, LM.RIGHT_SHOULDER, LM.LEFT_EYE_OUTER, LM.RIGHT_EYE_OUTER)
-    if frame.vis(*core) < limits.min_visibility:
-        return _empty(frame.ts, n, "landmarks not visible enough")
+    visibility = frame.vis(*core)
+    if visibility < limits.min_visibility:
+        return _empty(
+            frame.ts, n, "landmarks not visible enough", metrics={"visibility": visibility}
+        )
 
     ear_mid, _, shoulder_mid, face_h, ear_w = _common(frame)
     l_sh, r_sh = frame.p(LM.LEFT_SHOULDER), frame.p(LM.RIGHT_SHOULDER)
@@ -157,7 +180,10 @@ def extract_frontal(frame: PoseFrame, limits: QualityLimits | None = None) -> Fe
     eye_w = dist(frame.p(LM.LEFT_EYE_OUTER), frame.p(LM.RIGHT_EYE_OUTER))
 
     if eye_w < limits.min_eye_width or face_h < limits.min_face_height or ear_w < EPS:
-        return _empty(frame.ts, n, "face too small or degenerate")
+        return _empty(
+            frame.ts, n, "face too small or degenerate",
+            metrics={"eye_width": eye_w, "face_height": face_h},
+        )
 
     # Head turn as the nose's sideways offset relative to half the ear width:
     # ~0 looking straight at the lens, ~±1 in full profile.
@@ -166,10 +192,16 @@ def extract_frontal(frame: PoseFrame, limits: QualityLimits | None = None) -> Fe
     roll = (roll + 180.0) % 180.0
     roll = roll - 180.0 if roll > 90.0 else roll
 
+    metrics = {
+        "yaw": yaw,
+        "roll_deg": roll,
+        "eye_width": eye_w,
+        "hip_visibility": frame.vis(LM.LEFT_HIP, LM.RIGHT_HIP),
+    }
     if abs(yaw) > limits.max_yaw:
-        return _empty(frame.ts, n, "head turned away", yaw)
+        return _empty(frame.ts, n, "head turned away", yaw, metrics)
     if abs(roll) > limits.max_roll_deg:
-        return _empty(frame.ts, n, "torso tilted sideways", yaw)
+        return _empty(frame.ts, n, "torso tilted sideways", yaw, metrics)
 
     values = np.full(n, np.nan)
     values[0] = shoulder_w / eye_w
@@ -184,7 +216,7 @@ def extract_frontal(frame: PoseFrame, limits: QualityLimits | None = None) -> Fe
         values[4] = angle_from_vertical_deg(hip_mid, shoulder_mid)
     values[5] = _shoulder_depth(frame, limits)
 
-    return FeatureSample(ts=frame.ts, values=values, ok=True, pose_hint=yaw)
+    return FeatureSample(ts=frame.ts, values=values, ok=True, pose_hint=yaw, metrics=metrics)
 
 
 def extract_side(frame: PoseFrame, limits: QualityLimits | None = None) -> FeatureSample:
@@ -198,29 +230,43 @@ def extract_side(frame: PoseFrame, limits: QualityLimits | None = None) -> Featu
     n = len(SIDE_FEATURES)
 
     core = (*_HEAD_CORE, LM.LEFT_SHOULDER, LM.RIGHT_SHOULDER)
-    if frame.vis(*core) < limits.min_visibility:
-        return _empty(frame.ts, n, "landmarks not visible enough")
+    visibility = frame.vis(*core)
+    if visibility < limits.min_visibility:
+        return _empty(
+            frame.ts, n, "landmarks not visible enough", metrics={"visibility": visibility}
+        )
 
     ear_mid, _, shoulder_mid, face_h, ear_w = _common(frame)
     nose = frame.p(LM.NOSE)
 
     if face_h < limits.min_face_height:
-        return _empty(frame.ts, n, "face too small")
-    if ear_w / face_h > limits.max_ear_over_face:
-        return _empty(frame.ts, n, "not a side view; both ears still visible")
+        return _empty(frame.ts, n, "face too small", metrics={"face_height": face_h})
 
     # Which way the subject faces, from the nose sitting ahead of the ear line.
     # Every signed feature is multiplied by this, so the numbers mean the same
     # thing whether the camera stands to the left or to the right.
     facing_raw = (nose[0] - ear_mid[0]) / face_h
+    metrics = {
+        "ear_over_face": ear_w / face_h,
+        "facing": facing_raw,
+        "face_height": face_h,
+        "hip_visibility": frame.vis(LM.LEFT_HIP, LM.RIGHT_HIP),
+    }
+
+    # Two independent ways of asking "is this a profile". Both have to agree,
+    # because either one alone has a failure mode: the ear span depends on how
+    # mediapipe places the occluded ear, and the nose offset survives a head
+    # turned without the body following.
+    if ear_w / face_h > limits.max_ear_over_face:
+        return _empty(frame.ts, n, "not a side view; both ears still visible", metrics=metrics)
     if abs(facing_raw) < limits.min_facing:
-        return _empty(frame.ts, n, "facing direction ambiguous", facing_raw)
+        return _empty(frame.ts, n, "facing direction ambiguous", facing_raw, metrics)
     facing = math.copysign(1.0, facing_raw)
 
     neck = shoulder_mid - ear_mid
     neck_len = float(np.linalg.norm(neck))
     if neck_len < EPS:
-        return _empty(frame.ts, n, "degenerate neck segment", facing)
+        return _empty(frame.ts, n, "degenerate neck segment", facing, metrics)
 
     values = np.full(n, np.nan)
     # The measurement that matters: how far the acromion sits in front of the
@@ -244,7 +290,9 @@ def extract_side(frame: PoseFrame, limits: QualityLimits | None = None) -> Featu
         values[5] = math.degrees(math.atan2(facing * trunk[0], -trunk[1] + EPS))
         values[6] = facing * (ear_mid[0] - hip_mid[0]) / face_h
 
-    return FeatureSample(ts=frame.ts, values=values, ok=True, pose_hint=facing)
+    return FeatureSample(
+        ts=frame.ts, values=values, ok=True, pose_hint=facing, metrics=metrics
+    )
 
 
 def _shoulder_depth(frame: PoseFrame, limits: QualityLimits) -> float:

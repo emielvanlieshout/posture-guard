@@ -75,6 +75,35 @@ class TestFrontalLimits:
         assert slouched.values[3] < neutral.values[3] - 0.2
 
 
+class TestFrontalTracksElevation:
+    """What a frontal camera can see of the shoulders, once width is ruled out.
+
+    Protraction does not only roll the shoulders forward, it rides them up
+    toward the ears, and *that* is visible head-on. The ear-to-acromion drop
+    shrinks monotonically with the angle where the width does not, which is why
+    a laptop webcam is not the dead end the width result on its own suggests.
+    """
+
+    # Shoulders protract and rise; the head does not move at all.
+    SHOULDERS_ONLY = dict(forward_coupling=0.0, pitch_coupling=0.0, rise_coupling=0.30)
+
+    def test_the_ear_to_shoulder_drop_is_monotonic(self):
+        values = [
+            frontal(a, **self.SHOULDERS_ONLY).values[2] for a in (0, 5, 10, 15, 20, 25, 30)
+        ]
+        assert all(b < a for a, b in zip(values, values[1:]))
+        assert values[0] - values[-1] > 0.2
+
+    def test_width_is_still_useless_over_the_same_range(self):
+        values = [frontal(a, **self.SHOULDERS_ONLY).values[0] for a in (0, 15, 30)]
+        assert values[1] > values[0] and values[1] > values[2], "peaks in the middle"
+
+    def test_the_head_does_not_move_in_this_scenario(self):
+        """Guards the premise: any signal here has to come from the shoulders."""
+        pitches = [frontal(a, **self.SHOULDERS_ONLY).values[3] for a in (0, 15, 30)]
+        assert pitches[0] == pytest.approx(pitches[-1], abs=1e-6)
+
+
 class TestSideView:
     def test_shoulder_offset_is_monotonic(self):
         values = [side(a).values[0] for a in (0, 5, 10, 15, 20, 25, 30)]

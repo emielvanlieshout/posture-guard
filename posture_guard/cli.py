@@ -15,7 +15,7 @@ from . import config as cfgmod
 from . import permissions
 from .calibration import build_profile, collect_samples, verdict
 from .config import Config
-from .features import QualityLimits, get_feature_set
+from .features import get_feature_set
 from .landmarks import LM
 from .scoring import CalibrationError, Profile, Scorer, score_parts
 from .storage import Store
@@ -256,7 +256,7 @@ def cmd_calibrate(args) -> int:
     feature_set = get_feature_set(view)
     model = _require_model()
     _require_camera_permission()
-    limits = QualityLimits()
+    limits = cfg.quality_limits()
 
     print(f"Calibrating the {view} view — {feature_set.blurb}.")
     if view == "side":
@@ -299,7 +299,9 @@ def cmd_calibrate(args) -> int:
         return 1
 
     try:
-        profile = build_profile(feature_set, good, bad, min_separation=args.min_separation)
+        profile = build_profile(
+            feature_set, good, bad, min_separation=args.min_separation, limits=limits
+        )
     except CalibrationError as exc:
         print(f"calibration failed: {exc}", file=sys.stderr)
         return 1
@@ -407,15 +409,20 @@ def cmd_preview(args) -> int:
             if frame is None:
                 lines.append("no pose detected")
             else:
-                sample = feature_set.extract(frame)
+                sample = feature_set.extract(frame, cfg.quality_limits())
                 for i in range(frame.xy.shape[0]):
                     if frame.visibility[i] < 0.5:
                         continue
                     x = int(frame.xy[i, 0] / (width / height) * width)
                     y = int(frame.xy[i, 1] * height)
                     cv2.circle(image, (x, y), 3, (80, 220, 160), -1)
+                # Shown whether the frame passed or not: when nothing passes,
+                # these numbers are the only way to tell a badly placed camera
+                # from a threshold that wants nudging.
+                for name, value in sorted(sample.metrics.items()):
+                    lines.append(f"{name}: {value:.2f}")
                 if not sample.ok:
-                    lines.append(f"rejected: {sample.reason}")
+                    lines.append(f"REJECTED: {sample.reason}")
                 else:
                     if profile is not None:
                         parts = score_parts(profile, sample.values)

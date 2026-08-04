@@ -58,6 +58,13 @@ class Config:
     camera_height: int = 480
     fps: float = 6.0  # posture changes slowly; this keeps a core mostly idle
 
+    # -- frame quality ------------------------------------------------------
+    # Exposed because the right value depends on your camera and how far round
+    # it sits, and finding out means measuring rather than guessing. The
+    # calibration error prints what it actually saw.
+    max_ear_over_face: float = 0.70  # side view: lower means stricter about profile
+    min_facing: float = 0.25  # side view: nose must sit this far ahead of the ears
+
     # -- scoring ------------------------------------------------------------
     ema_tau: float = 1.5
 
@@ -89,6 +96,15 @@ class Config:
     ratchet_min_hours: float = 10.0
     recalibrate_after_days: int = 30
 
+    def quality_limits(self):
+        """Frame gates, with the side-view thresholds taken from this config."""
+        from .features import QualityLimits  # noqa: PLC0415 - avoids an import cycle
+
+        return QualityLimits(
+            max_ear_over_face=self.max_ear_over_face,
+            min_facing=self.min_facing,
+        )
+
     def policy_kwargs(self) -> dict:
         return {
             "enter": self.enter,
@@ -105,6 +121,10 @@ class Config:
             raise ValueError(f"view must be 'side' or 'frontal', not {self.view!r}")
         if not 0.0 < self.exit < self.enter:
             raise ValueError("need 0 < exit < enter")
+        if not 0.0 < self.max_ear_over_face <= 5.0:
+            raise ValueError("max_ear_over_face must be in (0, 5]")
+        if not 0.0 <= self.min_facing < 3.0:
+            raise ValueError("min_facing must be in [0, 3)")
         if not 0.0 < self.max_dim <= 0.85:
             # Above ~0.85 the screen stops being usable, which turns a nudge
             # into something you have to fight. Refuse to go there.

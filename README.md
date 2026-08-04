@@ -59,6 +59,27 @@ So posture-guard supports both, defaults to the side, and **tells you in numbers
 whether your setup can actually see your slouch** instead of leaving you to find
 out after three weeks.
 
+### A laptop webcam is not a dead end
+
+Width is the wrong thing to look at, but it is not the only thing. Protraction
+does not merely roll the shoulders forward, it rides them *up* toward the ears,
+and that is plainly visible head-on. Same model, head held perfectly still so
+every bit of signal has to come from the shoulders:
+
+| protraction | 0° | 5° | 10° | 15° | 20° | 25° | 30° |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| ear-to-shoulder drop (÷ face height) | 2.19 | 2.15 | 2.11 | 2.07 | 2.03 | 1.98 | 1.94 |
+| shoulder ÷ eye width | 3.71 | 3.80 | 3.86 | 3.89 | **3.90** | 3.86 | 3.80 |
+
+The drop falls monotonically the whole way; the width peaks in the middle and
+comes back. Calibrated on nothing but shoulder movement, that one feature takes
+71% of the weight on its own and the resulting score is monotonic from 0 to 26
+degrees.
+
+So a frontal setup does watch your shoulders. It reads their *height* rather
+than their width, and it cannot separate that from the head sinking — which is
+what the rest of the feature set and the disagreement term are for.
+
 ### And why your hip has to be in the shot
 
 The ear turns out to be a treacherous reference. Forward head posture moves the
@@ -139,9 +160,26 @@ Continuity Camera shows up as an ordinary camera. Use `posture-guard doctor` to
 find its index and `posture-guard config --set camera_index=1` to select it.
 
 **Frontal view.** Your built-in webcam, whole head and both shoulders in frame.
-It will track the slouch complex — chin dropping, head drifting forward,
-shoulders riding up — which normally travels with protraction but is not the
-same thing. Calibration will say so explicitly.
+No second camera, no stand, and it is what most people will actually use:
+
+```bash
+posture-guard config --set view=frontal
+posture-guard calibrate
+```
+
+It tracks the slouch complex — shoulders riding up, chin dropping, head drifting
+forward — which travels with protraction without being the same thing.
+Calibration says so explicitly rather than letting you assume otherwise.
+
+Make the two poses differ as much as you can *in the shoulders*: back and down
+hard for the first, rolled forward and up for the second. Weights follow
+whatever separates your two poses, so the more of that difference is shoulders,
+the more of the score is about shoulders.
+
+It is not gameable in either obvious direction. Against the synthetic model, a
+profile calibrated this way scores 1.50 for slouched shoulders with the chin
+deliberately tucked, and 0.60 — over the alert threshold — for good shoulders
+with the head craning forward.
 
 Check the framing before you calibrate:
 
@@ -376,7 +414,7 @@ profile, model and history. Uninstalling is deleting that directory.
 
 ```bash
 pip install -e ".[dev]"
-pytest -q                            # 243 tests, no camera needed
+pytest -q                            # 249 tests, no camera needed
 posture-guard selftest               # end-to-end on synthetic data
 ```
 
