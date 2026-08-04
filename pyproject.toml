@@ -5,12 +5,26 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "posture-guard"
 version = "0.1.0"
-description = "Local webcam posture monitor that targets shoulder protraction, not forward head posture."
+# Keep in step with the GitHub About blurb and topics; see docs/repo-metadata.md.
+description = "Webcam posture monitor that targets shoulder protraction, not forward head posture. Calibrated to you, runs entirely on-device."
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.10"
 authors = [{ name = "Emiel van Lieshout" }]
-keywords = ["posture", "ergonomics", "mediapipe", "webcam", "privacy", "macos"]
+keywords = [
+    "posture",
+    "posture-corrector",
+    "ergonomics",
+    "rsi",
+    "mediapipe",
+    "pose-estimation",
+    "computer-vision",
+    "webcam",
+    "macos",
+    "menubar-app",
+    "privacy",
+    "on-device",
+]
 classifiers = [
     "Environment :: MacOS X",
     "Intended Audience :: End Users/Desktop",
