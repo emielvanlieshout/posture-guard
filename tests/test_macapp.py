@@ -210,3 +210,12 @@ class TestDescribeInstall:
         assert str(bundle / "Contents" / "MacOS" / BUNDLE_NAME) in "\n".join(
             describe_install(bundle)
         )
+
+
+class TestLauncherOutputIsUsable:
+    def test_python_is_unbuffered(self, bundle):
+        """Writing to a file, Python block-buffers stdout: a log that only
+        appears once the process exits cannot explain why it exited."""
+        script = (bundle / "Contents" / "MacOS" / BUNDLE_NAME).read_text()
+        assert "PYTHONUNBUFFERED=1" in script
+        assert script.index("PYTHONUNBUFFERED") < script.index("exec $RUN")

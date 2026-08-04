@@ -75,9 +75,16 @@ def announce_running() -> None:
         'display notification "Watching your posture. Look for the bar in your menu bar." '
         'with title "posture-guard is running"'
     )
-    subprocess.run(  # noqa: S603 - fixed binary, literal script
-        [osascript, "-e", script],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        check=False,
-    )
+    try:
+        subprocess.run(  # noqa: S603 - fixed binary, literal script
+            [osascript, "-e", script],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        # A notification is a nicety. Waiting forever on one -- osascript can
+        # sit on an Automation permission prompt -- would hang the app it was
+        # meant to announce.
+        pass

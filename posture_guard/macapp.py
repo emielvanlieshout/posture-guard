@@ -64,6 +64,12 @@ else
     RUN="$PY"
 fi
 
+# Unbuffered. Writing to a file rather than a terminal, Python block-buffers
+# stdout, so output sits in memory until the buffer fills or the process exits.
+# A log that only tells you what happened once the app has stopped is no use for
+# working out why it stopped.
+export PYTHONUNBUFFERED=1
+
 # Run this file directly from a terminal and the output stays in front of you.
 # Redirecting unconditionally would mean the one command that could show you
 # what the app sees hides it in a log file, which is exactly the wrong way

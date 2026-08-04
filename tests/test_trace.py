@@ -75,3 +75,67 @@ class TestBundleDetection:
         monkeypatch.setattr("sys.platform", "linux")
         monkeypatch.setattr("os.getcwd", lambda: "/")
         assert not looks_bundled()
+
+
+class TestTheStartupPathIsActuallyTraced:
+    """These exist because a patch to cmd_run silently did not apply.
+
+    The log went dark exactly where the missing lines would have been, and four
+    rounds of guessing followed. Asserting the wiring is present is cheap; not
+    being able to see the startup is not.
+    """
+
+    def source(self):
+        from pathlib import Path
+
+        from posture_guard import cli
+
+        text = Path(cli.__file__).read_text()
+        start = text.index("def cmd_run(")
+        return text[start : text.index("\ndef ", start + 1)]
+
+    def test_the_runner_is_given_the_trace(self):
+        source = self.source()
+        assert "trace=trace" in source, "the Runner would report nothing at all"
+        assert "log=trace.step" in source, "its messages would go to a buffered stdout"
+
+    def test_every_stage_of_startup_announces_itself(self):
+        source = self.source()
+        for step in (
+            "starting  pid=",
+            "config:",
+            "calibration:",
+            "model:",
+            "camera permission:",
+            "alerters ready:",
+            "starting the menu bar",
+        ):
+            assert step in source, f"nothing logs {step!r}, so a hang there is invisible"
+
+    def test_the_last_line_before_the_menu_bar_is_the_menu_bar(self):
+        """Whatever hangs after that line, the log names the stage it hung in."""
+        source = self.source()
+        assert source.index("alerters ready:") < source.index("starting the menu bar")
+        assert source.index("starting the menu bar") < source.index("run_tray(runner")
+
+    def test_the_bundle_announces_itself(self):
+        assert "announce_running()" in self.source()
+
+
+class TestHelpersCannotHangTheApp:
+    def test_the_notification_has_a_timeout(self):
+        """osascript can sit on an Automation prompt for ever."""
+        from pathlib import Path
+
+        from posture_guard import trace as module
+
+        assert "timeout=" in Path(module.__file__).read_text()
+
+    def test_the_failure_alert_has_a_timeout(self):
+        from pathlib import Path
+
+        from posture_guard import cli
+
+        source = Path(cli.__file__).read_text()
+        surface = source[source.index("def _surface(") :]
+        assert "timeout=" in surface[: surface.index("\ndef ")]

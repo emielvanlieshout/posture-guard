@@ -418,27 +418,35 @@ def cmd_run(args) -> int:
             "reference keeps up with the posture you can now hold."
         )
 
-    store = Store(cfgmod.database_path())
-    runner = Runner(cfg, profile, store, model)
-
     if args.verbose and "status" not in cfg.alerters:
         cfg.alerters = [*cfg.alerters, "status"]
 
     headless = args.headless or sys.platform != "darwin"
     if headless and "dim" in cfg.alerters and sys.platform != "darwin":
-        print("the dim overlay needs macOS; falling back to console alerts")
+        trace.step("the dim overlay needs macOS; falling back to console alerts")
         cfg.alerters = ["console"]
-        runner = Runner(cfg, profile, store, model)
 
-    print(f"monitoring ({profile.view} view, alerters: {', '.join(cfg.alerters) or 'none'})")
+    store = Store(cfgmod.database_path())
+    # log and trace both go to the Runner: without them everything it has to
+    # say -- asking for the camera, being refused, capture starting -- happens
+    # in silence, which is exactly the gap that made this so hard to diagnose.
+    runner = Runner(cfg, profile, store, model, log=trace.step, trace=trace)
+    trace.step(f"alerters ready: {[a.name for a in runner.alerters] or 'none'}")
+
     try:
         if headless:
-            print("ctrl-c to stop")
+            trace.step("monitoring, ctrl-c to stop")
             run_headless(runner)
         else:
             from .tray import run_tray
 
+            trace.step("starting the menu bar")
+            if bundled:
+                # Nothing else confirms it came up: the menu bar item is one
+                # character wide and can hide behind a notch entirely.
+                announce_running()
             run_tray(runner, cfg, cfgmod.app_dir() / "report.html")
+            trace.step("menu bar closed")
     finally:
         runner.stop()
         store.close()
@@ -797,12 +805,16 @@ def _surface(message: str) -> None:
     if not osascript:
         return
     text = message.replace("\\", "\\\\").replace('"', '\\"')
-    subprocess.run(  # noqa: S603 - fixed binary, escaped literal
-        [osascript, "-e", f'display alert "posture-guard could not start" message "{text}"'],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        check=False,
-    )
+    try:
+        subprocess.run(  # noqa: S603 - fixed binary, escaped literal
+            [osascript, "-e", f'display alert "posture-guard could not start" message "{text}"'],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=30,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        pass
 
 
 def main(argv: list[str] | None = None) -> int:
