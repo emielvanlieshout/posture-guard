@@ -104,8 +104,12 @@ On Linux or Windows the pipeline works and the console alerter works; the dim
 overlay and the menu bar are macOS-only.
 
 > **Camera permission on macOS** is granted to the app that *launches* Python —
-> your terminal or IDE, not posture-guard. If `doctor` finds no cameras, look
-> under System Settings → Privacy & Security → Camera.
+> your terminal or IDE, not posture-guard, which macOS does not consider a thing
+> that exists. `doctor` reports the authorisation status outright and raises the
+> system prompt the first time. If it says `denied`, switch your terminal on
+> under System Settings → Privacy & Security → Camera and then **quit that
+> terminal completely (Cmd-Q) and reopen it** — a permission change does not
+> reach a process that is already running.
 
 > **`CERTIFICATE_VERIFY_FAILED` during setup** means this Python has no CA
 > bundle — normal on a fresh python.org, pyenv or conda install, which ignore
@@ -367,7 +371,7 @@ profile, model and history. Uninstalling is deleting that directory.
 
 ```bash
 pip install -e ".[dev]"
-pytest -q                            # 196 tests, no camera needed
+pytest -q                            # 242 tests, no camera needed
 posture-guard selftest               # end-to-end on synthetic data
 ```
 

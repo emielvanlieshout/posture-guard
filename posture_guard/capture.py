@@ -177,7 +177,17 @@ def _to_pose_frame(result, ts: float, width: int, height: int) -> PoseFrame | No
 
 
 def list_cameras(limit: int = 5) -> list[int]:
-    """Indices that actually open. Used by `posture-guard doctor`."""
+    """Indices that actually open. Used by `posture-guard doctor`.
+
+    Skipped entirely when macOS has refused camera access: probing would emit a
+    backend error per index and still tell you nothing you did not already know.
+    """
+    from .permissions import AUTHORIZED, UNAVAILABLE, camera_status  # noqa: PLC0415
+
+    status = camera_status()
+    if status not in (AUTHORIZED, UNAVAILABLE):
+        return []
+
     import cv2  # noqa: PLC0415
 
     found = []

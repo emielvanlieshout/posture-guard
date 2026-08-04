@@ -48,6 +48,9 @@ macos = [
     "rumps>=0.4.0",
     "pyobjc-framework-Cocoa>=10.0",
     "pyobjc-framework-Quartz>=10.0",
+    # Reads the camera authorisation status and raises the system prompt, so a
+    # refused permission reports itself instead of surfacing as a backend error.
+    "pyobjc-framework-AVFoundation>=10.0",
 ]
 dev = ["pytest>=8"]
 

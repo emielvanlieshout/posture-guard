@@ -12,6 +12,7 @@ from pathlib import Path
 import numpy as np
 
 from . import config as cfgmod
+from . import permissions
 from .calibration import build_profile, collect_samples, verdict
 from .config import Config
 from .features import QualityLimits, get_feature_set
@@ -41,6 +42,23 @@ def _load_profile() -> Profile:
         return Profile.from_json(path.read_text())
     except (ValueError, OSError) as exc:
         raise SystemExit(f"could not read {path}: {exc}") from None
+
+
+def _require_camera_permission() -> None:
+    """Fail with instructions rather than an opaque backend error.
+
+    Called before anything opens a camera, so a first run raises the macOS
+    prompt at the moment the user is expecting one.
+    """
+    status = permissions.camera_status()
+    if status in (permissions.AUTHORIZED, permissions.UNAVAILABLE):
+        return
+    if status == permissions.NOT_DETERMINED:
+        print("asking macOS for camera access, approve the prompt…")
+        status = permissions.request_camera_access()
+        if status in (permissions.AUTHORIZED, permissions.UNAVAILABLE):
+            return
+    raise SystemExit(f"camera access is {status}.\n{permissions.describe(status)}")
 
 
 def _require_model() -> Path:
@@ -170,25 +188,40 @@ def cmd_doctor(args) -> int:
         print(f"{'calibration':<18}MISSING  (run `posture-guard calibrate`)")
         ok = False
 
+    if sys.platform == "darwin":
+        # Asking outright beats probing and guessing from the failure. If macOS
+        # has not put the question yet, this is where the prompt appears.
+        status = permissions.camera_status()
+        if status == permissions.NOT_DETERMINED:
+            print(f"{'camera access':<18}asking macOS now, approve the prompt…")
+            status = permissions.request_camera_access()
+        print(f"{'camera access':<18}{status}")
+        guidance = permissions.describe(status)
+        if guidance:
+            ok = ok and status == permissions.UNAVAILABLE
+            for line in guidance.splitlines():
+                print(f"{'':<18}{line}")
+
+        for index, name in permissions.list_video_devices():
+            marker = "  <- config uses this" if index == cfg.camera_index else ""
+            print(f"{'':<18}[{index}] {name}{marker}")
+
     try:
         from .capture import list_cameras
 
         cameras = list_cameras()
         if cameras:
-            print(f"{'cameras':<18}indices {cameras} (config uses {cfg.camera_index})")
+            print(f"{'cameras opened':<18}indices {cameras} (config uses {cfg.camera_index})")
             if cfg.camera_index not in cameras:
                 print(f"{'':<18}camera {cfg.camera_index} did not open")
                 ok = False
         else:
-            print(f"{'cameras':<18}none opened")
-            if sys.platform == "darwin":
-                print(
-                    f"{'':<18}macOS asks the *launching* app for camera access. Check "
-                    "System Settings > Privacy & Security > Camera for your terminal."
-                )
+            print(f"{'cameras opened':<18}none")
+            if sys.platform != "darwin":
+                print(f"{'':<18}check that a camera is connected and not in use")
             ok = False
     except ImportError:
-        print(f"{'cameras':<18}skipped (opencv missing)")
+        print(f"{'cameras opened':<18}skipped (opencv missing)")
         ok = False
 
     print()
@@ -203,6 +236,7 @@ def cmd_calibrate(args) -> int:
     view = args.view or cfg.view
     feature_set = get_feature_set(view)
     model = _require_model()
+    _require_camera_permission()
     limits = QualityLimits()
 
     print(f"Calibrating the {view} view — {feature_set.blurb}.")
@@ -279,6 +313,7 @@ def cmd_run(args) -> int:
     cfg = _load_config()
     profile = _load_profile()
     model = _require_model()
+    _require_camera_permission()
 
     if profile.view != cfg.view:
         print(
@@ -325,6 +360,7 @@ def cmd_preview(args) -> int:
 
     cfg = _load_config()
     model = _require_model()
+    _require_camera_permission()
     profile = None
     if cfgmod.profile_path().exists():
         profile = Profile.from_json(cfgmod.profile_path().read_text())
