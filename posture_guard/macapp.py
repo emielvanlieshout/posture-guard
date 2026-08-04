@@ -52,19 +52,31 @@ LAUNCHER = """#!/bin/sh
 PY="{python}"
 LOG="$HOME/Library/Logs/posture-guard.log"
 
+# Pinned to whatever `install-app` was running as, because that is the
+# architecture the packages were built for. A universal Python inherits its
+# architecture from whatever started it, so launchd can hand you Rosetta even
+# when the terminal runs native -- and then the first compiled import dies and
+# the app is gone before it draws anything.
+ARCH="{arch}"
+if [ -x /usr/bin/arch ]; then
+    RUN="/usr/bin/arch -$ARCH $PY"
+else
+    RUN="$PY"
+fi
+
 # Run this file directly from a terminal and the output stays in front of you.
 # Redirecting unconditionally would mean the one command that could show you
 # what the app sees hides it in a log file, which is exactly the wrong way
 # round when the app will not start.
 if [ -t 1 ]; then
-    exec "$PY" -m posture_guard run "$@"
+    exec $RUN -m posture_guard run "$@"
 fi
 
 mkdir -p "$(dirname "$LOG")"
 # A dated marker, so the log distinguishes "never launched" from "launched and
 # then died" -- which look identical from the outside.
 printf '\n=== %s starting ===\n' "$(date '+%Y-%m-%d %H:%M:%S')" >>"$LOG"
-exec "$PY" -m posture_guard run >>"$LOG" 2>&1
+exec $RUN -m posture_guard run >>"$LOG" 2>&1
 """
 
 
@@ -93,11 +105,18 @@ def describe_install(bundle: Path | None = None) -> list[str]:
     if not launcher.stat().st_mode & stat.S_IXUSR:
         lines.append("launcher is not executable; rebuild it")
 
-    python = ""
+    python = pinned_arch = ""
     for line in launcher.read_text().splitlines():
         if line.startswith('PY="'):
             python = line[4:].rstrip('"')
-            break
+        elif line.startswith('ARCH="'):
+            pinned_arch = line[6:].rstrip('"')
+    if pinned_arch:
+        import platform
+
+        here = platform.machine()
+        note = "" if pinned_arch == here else f"   (this shell is {here})"
+        lines.append(f"pinned to {pinned_arch}{note}")
     if python:
         exists = Path(python).exists()
         lines.append(f"interpreter {python}" + ("" if exists else "   MISSING"))
@@ -130,10 +149,16 @@ def build_app(
     *,
     python: str | None = None,
     version: str = __version__,
+    arch: str | None = None,
 ) -> Path:
     """Write the bundle, replacing any previous one. Returns its path."""
+    import platform
+
     destination = Path(destination) if destination else default_destination()
     python = python or sys.executable
+    # This process imported the compiled packages to get here, so whatever it is
+    # running as is the architecture that works.
+    arch = arch or platform.machine()
     if not destination.name.endswith(".app"):
         destination = destination / f"{BUNDLE_NAME}.app"
 
@@ -169,7 +194,7 @@ def build_app(
         plistlib.dump(plist, handle)
 
     launcher = macos / BUNDLE_NAME
-    launcher.write_text(LAUNCHER.format(python=python))
+    launcher.write_text(LAUNCHER.format(python=python, arch=arch))
     launcher.chmod(launcher.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
 
     return destination

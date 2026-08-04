@@ -137,6 +137,15 @@ overlay and the menu bar are macOS-only.
 > cameras. The deprecated call is kept on purpose: its ordering is the one
 > OpenCV indexes by, and a correct index matters more than a tidy log line.
 
+> **`incompatible architecture (have 'arm64', need 'x86_64')`** means this
+> Python is running translated by Rosetta while its packages are compiled for
+> Apple Silicon. Nothing is corrupt. `posture-guard doctor` reports the
+> architecture on its third line and says what to do; `arch` in a shell tells
+> you what that shell is. A universal Python inherits its architecture from
+> whatever started it, which is why the same virtualenv can work from one
+> terminal and fail from another — and why `install-app` pins the bundle to the
+> architecture that was working when you ran it.
+
 > **`CERTIFICATE_VERIFY_FAILED` during setup** means this Python has no CA
 > bundle — normal on a fresh python.org, pyenv or conda install, which ignore
 > the macOS keychain. `setup` uses `certifi` to avoid it, so
@@ -475,7 +484,7 @@ profile, model and history. Uninstalling is deleting that directory.
 
 ```bash
 pip install -e ".[dev]"
-pytest -q                            # 319 tests, no camera needed
+pytest -q                            # 333 tests, no camera needed
 posture-guard selftest               # end-to-end on synthetic data
 ```
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 import time
@@ -10,17 +11,15 @@ import webbrowser
 from dataclasses import asdict
 from pathlib import Path
 
-import numpy as np
-
 from . import __version__
 from . import config as cfgmod
 from . import permissions
-from .calibration import build_profile, collect_samples, verdict
 from .config import Config
-from .features import get_feature_set
-from .landmarks import LM
-from .scoring import CalibrationError, Profile, Scorer, score_parts
 from .storage import Store
+
+# Everything that pulls numpy is imported inside the command that needs it.
+# `doctor` and `app-log` are the commands you reach for when the environment is
+# broken, and they must not die on the same import that broke it.
 
 VIEWS = ("side", "frontal")
 
@@ -36,7 +35,9 @@ def _load_config() -> Config:
         raise SystemExit(f"could not read {cfgmod.config_path()}: {exc}") from None
 
 
-def _load_profile() -> Profile:
+def _load_profile():
+    from .scoring import Profile
+
     path = cfgmod.profile_path()
     if not path.exists():
         raise SystemExit("no calibration yet. Run `posture-guard calibrate` first.")
@@ -138,17 +139,32 @@ def cmd_doctor(args) -> int:
     broken: list[str] = []
     pending: list[str] = []
 
+    from .arch import describe as describe_arch
+    from .arch import under_rosetta
+
     print(f"platform          {sys.platform}")
     print(f"python            {sys.version.split()[0]}")
+    print(f"architecture      {describe_arch()}")
     print(f"data directory    {cfgmod.app_dir()}")
+    if under_rosetta():
+        broken.append("run it natively instead of under Rosetta")
+
+    from .arch import explain_import_error
 
     for label, module in (("mediapipe", "mediapipe"), ("opencv", "cv2"), ("numpy", "numpy")):
         try:
             mod = __import__(module)
             print(f"{label:<18}{getattr(mod, '__version__', 'installed')}")
-        except ImportError:
-            print(f"{label:<18}MISSING  (pip install 'posture-guard[macos]')")
-            broken.append(f"install {label}")
+        except ImportError as exc:
+            explanation = explain_import_error(exc)
+            if explanation:
+                print(f"{label:<18}WRONG ARCHITECTURE")
+                for line in explanation.splitlines():
+                    print(f"{'':<18}{line}")
+                broken.append("fix the architecture mismatch")
+            else:
+                print(f"{label:<18}MISSING  (pip install 'posture-guard[macos]')")
+                broken.append(f"install {label}")
 
     if sys.platform == "darwin":
         for label, module in (("rumps", "rumps"), ("pyobjc AppKit", "AppKit")):
@@ -180,16 +196,18 @@ def cmd_doctor(args) -> int:
 
     profile_file = cfgmod.profile_path()
     if profile_file.exists():
+        # Read as plain JSON rather than through Profile: parsing it properly
+        # needs numpy, and numpy is one of the things that might be broken.
         try:
-            profile = Profile.from_json(profile_file.read_text())
-            age = (time.time() - profile.created) / 86400
-            print(f"{'calibration':<18}{profile.view} view, {age:.0f} days old")
+            payload = json.loads(profile_file.read_text())
+            age = (time.time() - float(payload.get("created", 0))) / 86400
+            print(f"{'calibration':<18}{payload.get('view', '?')} view, {age:.0f} days old")
             if age > cfg.recalibrate_after_days:
                 print(
                     f"{'':<18}older than {cfg.recalibrate_after_days} days — "
                     "recalibrate so the baseline keeps up with you"
                 )
-        except ValueError as exc:
+        except (ValueError, TypeError) as exc:
             print(f"{'calibration':<18}unreadable: {exc}")
             broken.append("posture-guard calibrate")
     else:
@@ -259,7 +277,10 @@ def cmd_doctor(args) -> int:
 
 
 def cmd_calibrate(args) -> int:
+    from .calibration import build_profile, collect_samples, verdict
     from .capture import PoseSource
+    from .features import get_feature_set
+    from .scoring import CalibrationError
 
     cfg = _load_config()
     view = args.view or cfg.view
@@ -424,8 +445,12 @@ def cmd_run(args) -> int:
 def cmd_preview(args) -> int:
     """Live view with landmarks and the score, for aiming the camera."""
     import cv2
+    import numpy as np
 
     from .capture import PoseSource
+    from .features import get_feature_set
+    from .landmarks import LM
+    from .scoring import Profile, Scorer, score_parts
 
     cfg = _load_config()
     model = _require_model()
@@ -524,8 +549,17 @@ def cmd_install_app(args) -> int:
         raise SystemExit(str(exc)) from None
     register(bundle)
 
+    from .arch import running_arch, under_rosetta
+
     print(f"built {bundle}")
     print(f"  runs {sys.executable} -m posture_guard run")
+    print(f"  pinned to {running_arch()}")
+    if under_rosetta():
+        print(
+            "  WARNING: this shell is translated by Rosetta, so the app is pinned to\n"
+            "  x86_64. If the packages are arm64 it will not start. Recreate the\n"
+            "  virtualenv natively and run install-app again."
+        )
     print("  menu bar only, no Dock icon")
     print(f"  logs to {Path.home() / 'Library' / 'Logs' / 'posture-guard.log'}")
 
@@ -765,6 +799,17 @@ def main(argv: list[str] | None = None) -> int:
         if isinstance(exc.code, str):
             _surface(exc.code)
         raise
+    except ImportError as exc:
+        from .arch import explain_import_error
+
+        explanation = explain_import_error(exc)
+        if explanation is None:
+            _surface(f"{type(exc).__name__}: {exc}")
+            raise
+        # numpy's own message is a page long and never mentions Rosetta.
+        print(f"\n{explanation}\n", file=sys.stderr)
+        _surface(explanation)
+        return 1
     except Exception as exc:  # noqa: BLE001 - re-raised after being surfaced
         _surface(f"{type(exc).__name__}: {exc}")
         raise
