@@ -124,9 +124,12 @@ def run_calibration_window(cfg: Config, model: Path, on_saved=None) -> bool:
         return field
 
     class Controller(NSObject):
-        def initWithSession(self):
-            self = super().init()
-            return self
+        """Target for the buttons, the timer and the window delegate.
+
+        No custom init: an Objective-C subclass would need ``objc.super`` rather
+        than Python's ``super``, and there is nothing here worth that footgun.
+        Attributes are set after alloc/init instead.
+        """
 
         # -- buttons ---------------------------------------------------------
 
@@ -223,7 +226,7 @@ def run_calibration_window(cfg: Config, model: Path, on_saved=None) -> bool:
     window.setReleasedWhenClosed_(False)
     window.center()
 
-    controller = Controller.alloc().initWithSession()
+    controller = Controller.alloc().init()
     controller.window = window
     controller.standalone = standalone
     window.setDelegate_(controller)
@@ -280,6 +283,12 @@ def run_calibration_window(cfg: Config, model: Path, on_saved=None) -> bool:
     timer = NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
         1.0 / UI_HZ, controller, "tick:", None, True
     )
+
+    if standalone:
+        # Started from a shell there is no bundle to inherit an activation
+        # policy from, and without one the window opens behind everything or
+        # not at all.
+        app.setActivationPolicy_(const("NSApplicationActivationPolicyRegular", default=0))
 
     camera.start()
     window.makeKeyAndOrderFront_(None)
