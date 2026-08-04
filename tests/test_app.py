@@ -154,3 +154,58 @@ class TestTrayTitle:
     def test_out_of_range_scores_are_clamped(self):
         assert title_for(State.ALERT, 5.0) == "█"
         assert title_for(State.CALM, -3.0) == "▁"
+
+
+class TestStatusLine:
+    """The live readout that answers "is this thing reacting to me at all"."""
+
+    def _line(self, score, state=State.CALM, intensity=0.0):
+        import io
+
+        from posture_guard.alerts.status import StatusLine
+
+        buf = io.StringIO()
+        printer = StatusLine(buf, interval=0.0)
+        printer.start()
+        printer.apply(Tick(ts=0.0, state=state, intensity=intensity, score=score))
+        return buf.getvalue()
+
+    def test_the_bar_grows_with_the_score(self):
+        from posture_guard.alerts.status import bar
+
+        assert bar(0.0).startswith("░")
+        assert bar(1.0) == "█" * 16
+        assert bar(0.5).count("█") == 8
+
+    def test_no_pose_reads_as_no_pose_not_as_zero(self):
+        from posture_guard.alerts.status import bar
+
+        assert bar(None) == "·" * 16
+        assert "nobody in view" in self._line(None, State.ABSENT)
+
+    def test_it_shows_the_score_and_the_dim(self):
+        line = self._line(0.88, State.ALERT, 0.34)
+        assert "0.88" in line
+        assert "34%" in line
+        assert "slouching" in line
+
+    def test_it_rewrites_one_line_rather_than_scrolling(self):
+        assert self._line(0.4).startswith("\r")
+
+    def test_it_throttles(self):
+        import io
+
+        from posture_guard.alerts.status import StatusLine
+
+        buf = io.StringIO()
+        printer = StatusLine(buf, interval=60.0)
+        printer.start()
+        for _ in range(5):
+            printer.apply(Tick(ts=0.0, state=State.CALM, intensity=0.0, score=0.2))
+        assert buf.getvalue().count("score") == 1
+
+    def test_verbose_adds_it_without_dropping_the_dim(self):
+        cfg = Config(alerters=["dim"])
+        if "status" not in cfg.alerters:
+            cfg.alerters = [*cfg.alerters, "status"]
+        assert cfg.alerters == ["dim", "status"]

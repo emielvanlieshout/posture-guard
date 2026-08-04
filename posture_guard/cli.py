@@ -352,6 +352,9 @@ def cmd_run(args) -> int:
     store = Store(cfgmod.database_path())
     runner = Runner(cfg, profile, store, model)
 
+    if args.verbose and "status" not in cfg.alerters:
+        cfg.alerters = [*cfg.alerters, "status"]
+
     headless = args.headless or sys.platform != "darwin"
     if headless and "dim" in cfg.alerters and sys.platform != "darwin":
         print("the dim overlay needs macOS; falling back to console alerts")
@@ -565,6 +568,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("run", help="start monitoring")
     p.add_argument("--headless", action="store_true", help="no menu bar, console only")
+    p.add_argument(
+        "--verbose",
+        action="store_true",
+        help="print a live score readout, to see it reacting to you",
+    )
     p.set_defaults(func=cmd_run)
 
     p = sub.add_parser("preview", help="live landmarks and features, for aiming the camera")

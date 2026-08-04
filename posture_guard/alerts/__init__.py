@@ -69,6 +69,7 @@ def build_alerters(cfg, on_error=None) -> list[SafeAlerter]:
     from .console import ConsoleAlerter
     from .dim import DimOverlay
     from .notify import NotificationAlerter
+    from .status import StatusLine
 
     built: list[SafeAlerter] = []
     for name in cfg.alerters:
@@ -81,6 +82,8 @@ def build_alerters(cfg, on_error=None) -> list[SafeAlerter]:
             built.append(SafeAlerter(NotificationAlerter(cooldown_s=cfg.notify_cooldown_s), on_error))
         elif key == "console":
             built.append(SafeAlerter(ConsoleAlerter(), on_error))
+        elif key == "status":
+            built.append(SafeAlerter(StatusLine(), on_error))
         elif on_error:
             on_error(f"unknown alerter {name!r} in config, ignoring")
     return built
