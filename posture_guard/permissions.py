@@ -21,6 +21,7 @@ from __future__ import annotations
 import os
 import sys
 import threading
+import time
 
 NOT_DETERMINED = "not-determined"
 RESTRICTED = "restricted"
@@ -73,16 +74,31 @@ def camera_status() -> str:
     return _STATUS_BY_CODE.get(int(code), UNAVAILABLE)
 
 
-def request_camera_access(timeout: float = 15.0) -> str:
+def _pump_main_loop(answered: threading.Event, timeout: float) -> None:
+    """Wait for the answer while letting the run loop draw the dialog.
+
+    The permission dialog is presented by the main run loop. Sitting on
+    ``Event.wait`` blocks precisely the thread that would show it, so the prompt
+    never appears and the wait times out having achieved nothing. Running the
+    loop in short slices instead lets the dialog appear and the answer arrive.
+    """
+    from Foundation import NSDate, NSRunLoop  # noqa: PLC0415
+
+    loop = NSRunLoop.currentRunLoop()
+    deadline = time.monotonic() + timeout
+    while not answered.is_set() and time.monotonic() < deadline:
+        loop.runUntilDate_(NSDate.dateWithTimeIntervalSinceNow_(0.05))
+
+
+def request_camera_access(timeout: float = 60.0) -> str:
     """Raise the system prompt if it has not been answered, and wait for it.
 
     Returns the resulting status. Only NOT_DETERMINED can be moved by this;
     once refused, macOS will not ask again and only System Settings will do.
 
-    Pass ``timeout=0`` to raise the prompt and carry on without waiting. That
-    matters inside an app bundle: the dialog is driven by the main run loop, so
-    blocking the main thread on the answer can be the very thing that stops it
-    appearing.
+    Call this from the main thread. OpenCV would otherwise try to ask on the
+    capture thread, where it cannot show a dialog at all -- which is why
+    capture.py sets OPENCV_AVFOUNDATION_SKIP_AUTH and leaves the asking here.
     """
     status = camera_status()
     if status != NOT_DETERMINED:
@@ -105,7 +121,15 @@ def request_camera_access(timeout: float = 15.0) -> str:
     except Exception:  # noqa: BLE001
         return camera_status()
 
-    answered.wait(timeout)
+    on_main_thread = threading.current_thread() is threading.main_thread()
+    if on_main_thread:
+        try:
+            _pump_main_loop(answered, timeout)
+        except Exception:  # noqa: BLE001 - fall back to a plain wait
+            answered.wait(timeout)
+    else:
+        answered.wait(timeout)
+
     # The completion flag is ignored on purpose: re-reading the status is the
     # authority, and it stays correct even if the callback never fires.
     return camera_status()

@@ -11,9 +11,17 @@ neither installed.
 
 from __future__ import annotations
 
+import os
 import time
 from contextlib import contextmanager
 from typing import Iterator
+
+# OpenCV's AVFoundation backend asks macOS for camera access itself, and to show
+# that dialog it has to spin the main run loop. Capture runs on a worker thread,
+# where it cannot, so it gives up with "can not spin main run loop from other
+# thread" and the camera never opens. Authorisation is ours to handle -- see
+# permissions.request_camera_access, which does it on the main thread and waits.
+os.environ.setdefault("OPENCV_AVFOUNDATION_SKIP_AUTH", "1")
 
 import numpy as np
 

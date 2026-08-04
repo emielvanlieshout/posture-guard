@@ -57,12 +57,17 @@ def _require_camera_permission() -> None:
     if status in (permissions.AUTHORIZED, permissions.UNAVAILABLE):
         return
     if status == permissions.NOT_DETERMINED:
-        # Ask, but carry on without waiting for the answer. Inside a bundle the
-        # prompt needs the main run loop, which is exactly what we would be
-        # blocking; and opening the camera raises it again anyway.
+        # Asked and waited for here, on the main thread, because this is the
+        # only place that can show the dialog. OpenCV cannot: it opens the
+        # camera from the capture thread and gives up.
         print("asking macOS for camera access, approve the prompt…")
-        permissions.request_camera_access(timeout=0.0)
-        return
+        status = permissions.request_camera_access()
+        if status in (permissions.AUTHORIZED, permissions.UNAVAILABLE):
+            return
+        if status == permissions.NOT_DETERMINED:
+            raise SystemExit(
+                "the camera prompt was not answered. Open the app again and approve it."
+            )
     raise SystemExit(f"camera access is {status}.\n{permissions.describe(status)}")
 
 

@@ -8,6 +8,9 @@ to "just try the camera" where the framework is absent.
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
+
 import pytest
 
 from posture_guard import permissions
@@ -255,3 +258,61 @@ class TestCliGate:
         monkeypatch.setattr(permissions, "request_camera_access", lambda *a, **k: AUTHORIZED)
         cli._require_camera_permission()
         assert "approve the prompt" in capsys.readouterr().out
+
+
+class TestAuthorisationOnTheMainThread:
+    """OpenCV cannot ask for camera access from the capture thread.
+
+    Its AVFoundation backend needs the main run loop to show the dialog, gives
+    up with "can not spin main run loop from other thread", and the camera never
+    opens. So the asking is ours, on the main thread, and OpenCV is told not to.
+    """
+
+    def test_opencv_is_told_not_to_ask(self):
+        from posture_guard import capture
+
+        assert os.environ.get("OPENCV_AVFOUNDATION_SKIP_AUTH") == "1"
+        assert "OPENCV_AVFOUNDATION_SKIP_AUTH" in Path(capture.__file__).read_text()
+
+    def test_the_flag_is_set_before_cv2_could_be_imported(self):
+        """It is read when a capture opens, so it has to be set at import time."""
+        source = Path(__import__("posture_guard.capture", fromlist=["x"]).__file__).read_text()
+        flag_line = source.index("OPENCV_AVFOUNDATION_SKIP_AUTH")
+        cv2_line = source.index("import cv2")
+        assert flag_line < cv2_line
+
+    def test_waiting_on_the_main_thread_pumps_the_run_loop(self, fake, monkeypatch):
+        """Blocking the main thread is what stops the dialog appearing at all."""
+        pumped = []
+        monkeypatch.setattr(
+            permissions, "_pump_main_loop", lambda event, timeout: pumped.append(timeout)
+        )
+        fake(status_code=0, grant=True)
+        assert permissions.request_camera_access(timeout=7.0) == AUTHORIZED
+        assert pumped == [7.0]
+
+    def test_a_worker_thread_falls_back_to_a_plain_wait(self, fake, monkeypatch):
+        import threading
+
+        pumped = []
+        monkeypatch.setattr(
+            permissions, "_pump_main_loop", lambda event, timeout: pumped.append(timeout)
+        )
+        fake(status_code=0, grant=True)
+
+        result = {}
+        thread = threading.Thread(
+            target=lambda: result.update(status=permissions.request_camera_access(timeout=0.1))
+        )
+        thread.start()
+        thread.join(timeout=5)
+        assert result["status"] == AUTHORIZED
+        assert not pumped, "only the main thread may run the loop"
+
+    def test_a_broken_run_loop_does_not_lose_the_answer(self, fake, monkeypatch):
+        def explode(event, timeout):
+            raise RuntimeError("no run loop here")
+
+        monkeypatch.setattr(permissions, "_pump_main_loop", explode)
+        fake(status_code=0, grant=True)
+        assert permissions.request_camera_access(timeout=0.1) == AUTHORIZED
