@@ -38,6 +38,9 @@ classifiers = [
 dependencies = [
     "mediapipe>=1.0.0",
     "numpy>=1.26",
+    # Used only by `setup`, to verify the model download on Python builds that
+    # do not use the system trust store (python.org, pyenv, conda).
+    "certifi>=2024.2.2",
 ]
 
 [project.optional-dependencies]

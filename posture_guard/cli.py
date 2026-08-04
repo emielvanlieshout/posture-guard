@@ -44,9 +44,14 @@ def _load_profile() -> Profile:
 
 
 def _require_model() -> Path:
+    from .model import manual_download_hint
+
     path = cfgmod.model_path()
     if not path.exists():
-        raise SystemExit("pose model missing. Run `posture-guard setup` first.")
+        raise SystemExit(
+            "pose model missing. Run `posture-guard setup` first, or fetch it by hand:\n"
+            f"  {manual_download_hint(path)}"
+        )
     return path
 
 
@@ -71,7 +76,7 @@ def _countdown(message: str, seconds: int) -> None:
 
 
 def cmd_setup(args) -> int:
-    from .model import ensure_model
+    from .model import ModelDownloadError, ensure_model
 
     directory = cfgmod.app_dir()
     directory.mkdir(parents=True, exist_ok=True)
@@ -87,8 +92,12 @@ def cmd_setup(args) -> int:
     print("downloading the pose model (this is the only network request there is)…")
     try:
         path = ensure_model(cfgmod.model_path(), force=args.force)
+    except ModelDownloadError as exc:
+        print(f"\ndownload failed: {exc}", file=sys.stderr)
+        print("\nRe-run `posture-guard setup` once the model is in place.", file=sys.stderr)
+        return 1
     except Exception as exc:  # noqa: BLE001
-        print(f"download failed: {exc}", file=sys.stderr)
+        print(f"\ndownload failed: {exc}", file=sys.stderr)
         return 1
     print(f"model ready: {path} ({path.stat().st_size / 1e6:.1f} MB)")
     print()
@@ -128,7 +137,19 @@ def cmd_doctor(args) -> int:
     if model.exists():
         print(f"{'pose model':<18}{model.stat().st_size / 1e6:.1f} MB")
     else:
+        from .model import manual_download_hint
+
         print(f"{'pose model':<18}MISSING  (run `posture-guard setup`)")
+        try:
+            import certifi
+
+            print(f"{'':<18}certifi {certifi.__version__} present, TLS should verify")
+        except ImportError:
+            print(
+                f"{'':<18}certifi missing, so the download will fail TLS verification "
+                "on a python.org or conda build: pip install certifi"
+            )
+        print(f"{'':<18}by hand: {manual_download_hint(model)}")
         ok = False
 
     profile_file = cfgmod.profile_path()

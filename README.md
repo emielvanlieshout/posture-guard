@@ -107,6 +107,16 @@ overlay and the menu bar are macOS-only.
 > your terminal or IDE, not posture-guard. If `doctor` finds no cameras, look
 > under System Settings → Privacy & Security → Camera.
 
+> **`CERTIFICATE_VERIFY_FAILED` during setup** means this Python has no CA
+> bundle — normal on a fresh python.org, pyenv or conda install, which ignore
+> the macOS keychain. `setup` uses `certifi` to avoid it, so
+> `pip install --upgrade certifi` fixes it. Failing that, the error message
+> prints a `curl` command that fetches the model using the system trust store
+> instead.
+
+Paste the commands without the trailing `# comments` — zsh does not treat `#`
+as a comment in an interactive shell, so they arrive as arguments.
+
 ---
 
 ## Setting up the camera
