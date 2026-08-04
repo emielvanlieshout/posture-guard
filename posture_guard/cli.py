@@ -593,6 +593,16 @@ def cmd_report(args) -> int:
     return 0
 
 
+def cmd_status(args) -> int:
+    """Running or not, and reading the camera or not. Those are different."""
+    from .macapp import log_path
+    from .status import collect, report
+
+    for line in report(collect(cfgmod.database_path(), log_path())):
+        print(line)
+    return 0
+
+
 def cmd_app_log(args) -> int:
     """Show what the bundled app wrote, since it has no terminal to write to."""
     from .macapp import log_path
@@ -744,6 +754,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--html", nargs="?", const="posture-report.html", help="write an HTML report")
     p.add_argument("--open", action="store_true", help="open the HTML report in a browser")
     p.set_defaults(func=cmd_report)
+
+    p = sub.add_parser("status", help="is it running, and is it seeing anything")
+    p.set_defaults(func=cmd_status)
 
     p = sub.add_parser("app-log", help="show what the bundled app logged")
     p.add_argument("-f", "--follow", action="store_true", help="keep watching for new lines")

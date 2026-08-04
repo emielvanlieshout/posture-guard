@@ -68,7 +68,7 @@ class TestCli:
         commands = set(actions[0].choices)
         assert commands == {
             "setup", "doctor", "calibrate", "run", "preview", "install-app",
-            "report", "pause", "resume", "selftest", "config", "app-log",
+            "report", "pause", "resume", "selftest", "config", "app-log", "status",
         }
         for name, sub in actions[0].choices.items():
             assert sub.get_default("func") is not None, f"{name} has no handler"
