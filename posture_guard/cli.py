@@ -47,27 +47,25 @@ def _load_profile():
         raise SystemExit(f"could not read {path}: {exc}") from None
 
 
-def _require_camera_permission() -> None:
+def _require_camera_permission(allow_prompt: bool = True) -> None:
     """Fail with instructions rather than an opaque backend error.
 
-    Called before anything opens a camera, so a first run raises the macOS
-    prompt at the moment the user is expecting one.
+    Called before anything opens a camera. ``allow_prompt=False`` for the
+    monitor, which asks later from its own run loop.
     """
     status = permissions.camera_status()
     if status in (permissions.AUTHORIZED, permissions.UNAVAILABLE):
         return
     if status == permissions.NOT_DETERMINED:
-        # Asked and waited for here, on the main thread, because this is the
-        # only place that can show the dialog. OpenCV cannot: it opens the
-        # camera from the capture thread and gives up.
-        print("asking macOS for camera access, approve the prompt…")
-        status = permissions.request_camera_access()
-        if status in (permissions.AUTHORIZED, permissions.UNAVAILABLE):
+        # Not fatal, and deliberately not asked for here. A dialog needs a
+        # running application, and `run` has not started one yet; the Runner
+        # asks from its own loop instead. The commands that block on a camera
+        # ask here because by then they are about to open one.
+        if allow_prompt:
+            print("asking macOS for camera access, approve the prompt…")
+            status = permissions.request_camera_access()
+        if status in (permissions.AUTHORIZED, permissions.UNAVAILABLE, permissions.NOT_DETERMINED):
             return
-        if status == permissions.NOT_DETERMINED:
-            raise SystemExit(
-                "the camera prompt was not answered. Open the app again and approve it."
-            )
     raise SystemExit(f"camera access is {status}.\n{permissions.describe(status)}")
 
 
@@ -405,7 +403,7 @@ def cmd_run(args) -> int:
     model = _require_model()
     trace.step(f"model: {model.stat().st_size / 1e6:.1f} MB")
     trace.step(f"camera permission: {permissions.camera_status()}")
-    _require_camera_permission()
+    _require_camera_permission(allow_prompt=False)
 
     if profile.view != cfg.view:
         print(

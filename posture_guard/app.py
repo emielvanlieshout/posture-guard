@@ -16,6 +16,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+from . import permissions
 from .alerts import SafeAlerter, build_alerters
 from .config import Config, pause_flag_path
 from .features import QualityLimits, get_feature_set
@@ -205,6 +206,9 @@ class Runner:
         self.worker = Worker(cfg, profile, store, self.shared, model_path, trace=trace)
         self.alerters: list[SafeAlerter] = build_alerters(cfg, on_error=log)
         self._started = False
+        self._worker_started = False
+        self._asked_for_camera = False
+        self._reported_denial = False
         self._reported_error = False
 
     @property
@@ -222,11 +226,47 @@ class Runner:
     def start(self) -> None:
         for alerter in self.alerters:
             alerter.start()
-        self.worker.start()
         self._started = True
+        # The worker starts from pump(), once macOS has answered about the
+        # camera. See _maybe_start_worker.
+
+    def _maybe_start_worker(self) -> None:
+        """Start capture once there is permission, asking for it if need be.
+
+        The asking happens here rather than before launch because a permission
+        dialog needs a running application: an app that has not finished coming
+        up has nothing to present it, and the request comes back unanswered
+        having shown the user nothing. By the time pump() is being called the
+        run loop is live and the dialog appears.
+        """
+        if self._worker_started:
+            return
+
+        status = permissions.camera_status()
+        if status in (permissions.AUTHORIZED, permissions.UNAVAILABLE):
+            self.worker.start()
+            self._worker_started = True
+            if self.trace:
+                self.trace.step("camera authorised, capture starting")
+            return
+
+        if status == permissions.NOT_DETERMINED:
+            if not self._asked_for_camera:
+                self._asked_for_camera = True
+                if self.trace:
+                    self.trace.step("asking macOS for camera access")
+                # Fire and return: the live run loop delivers both the dialog
+                # and the answer, and the next pump sees the new status.
+                permissions.request_camera_access(timeout=0.0)
+            return
+
+        if not self._reported_denial:
+            self._reported_denial = True
+            self.log(f"camera access is {status}. {permissions.describe(status)}")
 
     def pump(self) -> None:
         """Push the latest state into the alerters. Safe to call at any rate."""
+        self._maybe_start_worker()
         tick, age = self.shared.read()
         if tick is None or age > STALE_AFTER_S:
             # Nothing fresh: clear everything rather than leave a stale dim.
@@ -242,7 +282,8 @@ class Runner:
         if not self._started:
             return
         self.worker.stop()
-        self.worker.join(timeout=3.0)
+        if self._worker_started:
+            self.worker.join(timeout=3.0)
         for alerter in self.alerters:
             alerter.stop()
         self._started = False

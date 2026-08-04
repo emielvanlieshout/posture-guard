@@ -209,3 +209,87 @@ class TestStatusLine:
         if "status" not in cfg.alerters:
             cfg.alerters = [*cfg.alerters, "status"]
         assert cfg.alerters == ["dim", "status"]
+
+
+class TestCameraPermissionOrdering:
+    """A permission dialog needs a running application.
+
+    Asking before the app has come up means the request returns unanswered
+    having shown the user nothing, so the Runner asks from its own loop and
+    starts capture once the answer arrives.
+    """
+
+    def _runner(self, profile, tmp_path, store, log=None):
+        return Runner(
+            Config(alerters=[]), profile, store, tmp_path / "model.task",
+            log=log or (lambda _: None),
+        )
+
+    def test_capture_does_not_start_before_there_is_permission(self, profile, tmp_path, monkeypatch):
+        from posture_guard import permissions
+
+        monkeypatch.setattr(permissions, "camera_status", lambda: permissions.NOT_DETERMINED)
+        asked = []
+        monkeypatch.setattr(
+            permissions, "request_camera_access", lambda timeout=0: asked.append(timeout)
+        )
+        with Store(tmp_path / "t.db") as store:
+            runner = self._runner(profile, tmp_path, store)
+            monkeypatch.setattr(runner.worker, "start", lambda: pytest.fail("started too early"))
+            runner.start()
+            runner.pump()
+            assert asked == [0.0], "asks once, without blocking the loop that shows the dialog"
+            runner.pump()
+            assert asked == [0.0], "and does not badger macOS on every tick"
+
+    def test_capture_starts_as_soon_as_the_answer_arrives(self, profile, tmp_path, monkeypatch):
+        from posture_guard import permissions
+
+        answers = iter([permissions.NOT_DETERMINED, permissions.AUTHORIZED])
+        monkeypatch.setattr(permissions, "camera_status", lambda: next(answers, permissions.AUTHORIZED))
+        monkeypatch.setattr(permissions, "request_camera_access", lambda timeout=0: None)
+        started = []
+        with Store(tmp_path / "t.db") as store:
+            runner = self._runner(profile, tmp_path, store)
+            monkeypatch.setattr(runner.worker, "start", lambda: started.append(True))
+            runner.start()
+            runner.pump()
+            assert not started
+            runner.pump()
+            assert started == [True]
+
+    def test_a_refusal_is_reported_once_not_every_tick(self, profile, tmp_path, monkeypatch):
+        from posture_guard import permissions
+
+        monkeypatch.setattr(permissions, "camera_status", lambda: permissions.DENIED)
+        messages = []
+        with Store(tmp_path / "t.db") as store:
+            runner = self._runner(profile, tmp_path, store, log=messages.append)
+            runner.start()
+            for _ in range(5):
+                runner.pump()
+        assert len(messages) == 1
+        assert "Privacy & Security" in messages[0]
+
+    def test_a_platform_without_avfoundation_just_starts(self, profile, tmp_path, monkeypatch):
+        from posture_guard import permissions
+
+        monkeypatch.setattr(permissions, "camera_status", lambda: permissions.UNAVAILABLE)
+        started = []
+        with Store(tmp_path / "t.db") as store:
+            runner = self._runner(profile, tmp_path, store)
+            monkeypatch.setattr(runner.worker, "start", lambda: started.append(True))
+            runner.start()
+            runner.pump()
+            assert started == [True]
+
+    def test_stopping_before_capture_started_is_harmless(self, profile, tmp_path, monkeypatch):
+        from posture_guard import permissions
+
+        monkeypatch.setattr(permissions, "camera_status", lambda: permissions.NOT_DETERMINED)
+        monkeypatch.setattr(permissions, "request_camera_access", lambda timeout=0: None)
+        with Store(tmp_path / "t.db") as store:
+            runner = self._runner(profile, tmp_path, store)
+            runner.start()
+            runner.pump()
+            runner.stop()

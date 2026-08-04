@@ -484,7 +484,7 @@ profile, model and history. Uninstalling is deleting that directory.
 
 ```bash
 pip install -e ".[dev]"
-pytest -q                            # 338 tests, no camera needed
+pytest -q                            # 343 tests, no camera needed
 posture-guard selftest               # end-to-end on synthetic data
 ```
 
