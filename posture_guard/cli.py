@@ -464,6 +464,38 @@ def cmd_preview(args) -> int:
     return 0
 
 
+def cmd_install_app(args) -> int:
+    """Wrap the installed package in a real .app bundle."""
+    from .macapp import BundleError, build_app, default_destination, register, set_login_item
+
+    if sys.platform != "darwin":
+        raise SystemExit("app bundles are a macOS thing")
+
+    destination = Path(args.to).expanduser() if args.to else default_destination()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        bundle = build_app(destination)
+    except BundleError as exc:
+        raise SystemExit(str(exc)) from None
+    register(bundle)
+
+    print(f"built {bundle}")
+    print(f"  runs {sys.executable} -m posture_guard run")
+    print("  menu bar only, no Dock icon")
+    print(f"  logs to {Path.home() / 'Library' / 'Logs' / 'posture-guard.log'}")
+
+    if args.login_item:
+        if set_login_item(bundle, add=True):
+            print("  added to your login items")
+        else:
+            print("  could not add it to login items; do it in System Settings > General > Login Items")
+
+    print()
+    print("Open it once from Finder. macOS will ask for the camera in the app's own")
+    print("name this time, rather than your terminal's.")
+    return 0
+
+
 def cmd_report(args) -> int:
     from .report import render_text, write_html
 
@@ -579,6 +611,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--view", choices=VIEWS)
     p.add_argument("--camera", type=int)
     p.set_defaults(func=cmd_preview)
+
+    p = sub.add_parser("install-app", help="build a real macOS app bundle")
+    p.add_argument("--to", help="where to put it (default: ~/Applications)")
+    p.add_argument(
+        "--login-item", action="store_true", help="also start it when you log in"
+    )
+    p.set_defaults(func=cmd_install_app)
 
     p = sub.add_parser("report", help="show your history")
     p.add_argument("--days", type=int, default=14)

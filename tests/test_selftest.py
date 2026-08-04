@@ -67,7 +67,7 @@ class TestCli:
         actions = [a for a in parser._actions if hasattr(a, "choices") and a.choices]
         commands = set(actions[0].choices)
         assert commands == {
-            "setup", "doctor", "calibrate", "run", "preview",
+            "setup", "doctor", "calibrate", "run", "preview", "install-app",
             "report", "pause", "resume", "selftest", "config",
         }
         for name, sub in actions[0].choices.items():

@@ -340,9 +340,36 @@ screen will not fix that on its own.
 
 ---
 
-## Keeping it running
+## Making it a real app
 
-To start it at login, drop this in `~/Library/LaunchAgents/com.posture-guard.plist`
+Run from a terminal, this is not an application as far as macOS is concerned. It
+has no identity, so the camera permission is granted to Terminal and listed
+under that name; it has no Info.plist, so the prompt cannot say why it wants the
+camera; it takes a Dock icon it has no use for; and it dies with the window you
+started it in.
+
+```bash
+posture-guard install-app --login-item
+```
+
+That writes `~/Applications/PostureGuard.app` — a launcher plus an Info.plist,
+not a vendored copy of Python, so the app and the `posture-guard` command remain
+the same program. It runs in the menu bar with no Dock icon, asks for the camera
+in its own name with a sentence explaining why, declares Continuity Camera
+support (which is what that deprecation warning in the logs is asking for), and
+logs to `~/Library/Logs/posture-guard.log`.
+
+Open it once from Finder so macOS can ask for the camera. Rebuild it after
+upgrading with the same command.
+
+Unsigned, so it is fine for your own machine and Gatekeeper will stop anyone
+else opening it without a right-click → Open. Signing it properly needs a paid
+Apple developer account.
+
+## Keeping it running headless
+
+If you would rather not have an app bundle, a launch agent works too. Drop this
+in `~/Library/LaunchAgents/com.posture-guard.plist`
 (adjust the paths) and run `launchctl load ~/Library/LaunchAgents/com.posture-guard.plist`:
 
 ```xml
@@ -414,7 +441,7 @@ profile, model and history. Uninstalling is deleting that directory.
 
 ```bash
 pip install -e ".[dev]"
-pytest -q                            # 249 tests, no camera needed
+pytest -q                            # 273 tests, no camera needed
 posture-guard selftest               # end-to-end on synthetic data
 ```
 
