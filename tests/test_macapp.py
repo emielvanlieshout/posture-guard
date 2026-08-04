@@ -165,3 +165,48 @@ class TestFatalErrorsAreVisible:
         script = calls[0][-1]
         assert script.count('"') % 2 == 0
         assert '\\"no\\"' in script
+
+
+class TestLauncherDebuggability:
+    """An app that will not start and an app that started invisibly look the
+    same from outside, so the launcher has to make them distinguishable."""
+
+    def test_a_terminal_gets_the_output_not_the_log(self, bundle):
+        script = (bundle / "Contents" / "MacOS" / BUNDLE_NAME).read_text()
+        assert "[ -t 1 ]" in script, "must notice it is being run by hand"
+        interactive = script.split("[ -t 1 ]")[1].split("fi")[0]
+        assert ">>" not in interactive, "redirecting would hide the very thing being looked for"
+
+    def test_finder_gets_the_log_with_a_dated_marker(self, bundle):
+        script = (bundle / "Contents" / "MacOS" / BUNDLE_NAME).read_text()
+        assert "starting ===" in script
+        assert 'date ' in script
+
+
+class TestDescribeInstall:
+    def test_a_missing_bundle_says_how_to_get_one(self, tmp_path):
+        from posture_guard.macapp import describe_install
+
+        lines = describe_install(tmp_path / "nothing.app")
+        assert "not installed" in lines[0]
+        assert "install-app" in lines[0]
+
+    def test_it_reports_the_interpreter(self, bundle):
+        from posture_guard.macapp import describe_install
+
+        text = "\n".join(describe_install(bundle))
+        assert "/opt/venv/bin/python" in text
+
+    def test_a_vanished_virtualenv_is_called_out(self, bundle):
+        from posture_guard.macapp import describe_install
+
+        text = "\n".join(describe_install(bundle))
+        assert "MISSING" in text, "/opt/venv does not exist here"
+        assert "rebuild" in text
+
+    def test_it_points_at_the_launcher_for_a_manual_run(self, bundle):
+        from posture_guard.macapp import describe_install
+
+        assert str(bundle / "Contents" / "MacOS" / BUNDLE_NAME) in "\n".join(
+            describe_install(bundle)
+        )

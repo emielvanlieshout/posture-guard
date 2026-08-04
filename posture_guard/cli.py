@@ -194,6 +194,12 @@ def cmd_doctor(args) -> int:
         print(f"{'calibration':<18}not done yet")
         pending.append("posture-guard calibrate")
 
+    if sys.platform == "darwin":
+        from .macapp import describe_install
+
+        for i, line in enumerate(describe_install()):
+            print(f"{'app bundle' if i == 0 else '':<18}{line}")
+
     devices: list[tuple[int, str]] = []
     if sys.platform == "darwin":
         # Asking outright beats probing and guessing from the failure. If macOS
